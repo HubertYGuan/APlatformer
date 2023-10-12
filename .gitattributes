@@ -1,0 +1,4 @@
+# Only the two massive textures
+/Content/CitySampleBuildings/Textures/Block/T_Block_PackedB.uasset filter=lfs diff=lfs merge=lfs -text
+
+/Content/CitySampleBuildings/Textures/Brick/T_Brick_PackedB.uasset filter=lfs diff=lfs merge=lfs -text
