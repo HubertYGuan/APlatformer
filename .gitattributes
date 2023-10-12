@@ -2,3 +2,5 @@
 /Content/CitySampleBuildings/Textures/Block/T_Block_PackedB.uasset filter=lfs diff=lfs merge=lfs -text
 
 /Content/CitySampleBuildings/Textures/Brick/T_Brick_PackedB.uasset filter=lfs diff=lfs merge=lfs -text
+
+/Content/CitySampleBuildings/Building/NY/G/Kit_Bldg_NYG_L2_A/Mesh/SM_BLDG_NYG_L02_A_Wall_04_N1.uasset filter=lfs diff=lfs merge=lfs -text
