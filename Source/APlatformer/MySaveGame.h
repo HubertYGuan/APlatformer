@@ -26,6 +26,9 @@ class APLATFORMER_API UMySaveGame : public USaveGame
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Gear)
 	bool bHasClimbingGear;
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Gear)
+	bool bHasSlidingGear;
+
 	//spawn info
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Spawn)
 	FVector LastCheckpointPos = FVector(0,0,0);

@@ -31,6 +31,10 @@ class APLATFORMER_API APCThing : public APlayerController
   UFUNCTION(BlueprintImplementableEvent, Category = Ability)
   void CreateClimbing();
 
+  //Creates a widget to show sliding is unlocked
+  UFUNCTION(BlueprintImplementableEvent, Category = Ability)
+  void CreateSliding();
+
   //Creates/removes a widget for a tip: crouch
   UFUNCTION(BlueprintImplementableEvent, Category = Tips)
   void CreateTip(FName TipType);

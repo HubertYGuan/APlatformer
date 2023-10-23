@@ -355,6 +355,10 @@ void AAPlatformerCharacter::SetIgnoreForward(bool ShouldDisable)
   }
 }
 
+void AAPlatformerCharacter::ResetSlideCooldown()
+{
+}
+
 AAPlatformerCharacter::AAPlatformerCharacter()
 {
 	// Character doesnt have a rifle at start
@@ -432,9 +436,12 @@ void AAPlatformerCharacter::SetupPlayerInputComponent(class UInputComponent* Pla
 		//Jumping
 		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Started, this, &ACharacter::Jump);
 		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Ongoing, this, &ACharacter::StopJumping);
-    //Crouching
+    //Crouching and sliding
 		EnhancedInputComponent->BindAction(CrouchAction, ETriggerEvent::Started, this, &AAPlatformerCharacter::CrouchE);
 		EnhancedInputComponent->BindAction(CrouchAction, ETriggerEvent::Completed, this, &AAPlatformerCharacter::UnCrouchE);
+
+    EnhancedInputComponent->BindAction(CrouchAction, ETriggerEvent::Triggered, this, &AAPlatformerCharacter::CheckSlideSpeed);
+
 
 		//Moving
 		EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Triggered, this, &AAPlatformerCharacter::Move);
@@ -495,11 +502,51 @@ void AAPlatformerCharacter::Look(const FInputActionValue& Value)
 
 void AAPlatformerCharacter::CrouchE()
 {
-  Crouch();
+  //check for sprinting to slide and falling to queueing to slide
+  if (bIsSprinting && bHasSlidingGear)
+  {
+    if (GetCharacterMovement()->IsFalling())
+    {
+      if (!LandedDelegate.Contains(this, FName("BeginSlide")))
+      {
+        LandedDelegate.AddDynamic(this, &AAPlatformerCharacter::BeginSlide);
+        UKismetSystemLibrary::PrintString(this, "binded landeddelegate with beginslide");
+      }
+    }
+    else
+    {
+      BeginSlide();
+    }
+  }
+  if (!bIsSliding)
+  {
+    Crouch();
+  }
 }
 
 void AAPlatformerCharacter::UnCrouchE()
 {
+  if (!bHasSlidingGear)
+  {
+    UnCrouch();
+    return;
+  }
+  if (bIsSliding)
+  {
+    EndSlideCompletely();
+    return;
+  }
+  else
+  {
+    while (JumpDelegate.Contains(this, FName("EndSlideInAir")))
+    {
+      JumpDelegate.RemoveDynamic(this, &AAPlatformerCharacter::EndSlideInAir);
+    }
+    while (LandedDelegate.Contains(this, FName("BeginSlide")))
+    {
+      LandedDelegate.RemoveDynamic(this, &AAPlatformerCharacter::BeginSlide);
+    }
+  }
   UnCrouch();
 }
 
@@ -519,6 +566,139 @@ void AAPlatformerCharacter::Sprint()
     GetCharacterMovement()->MaxWalkSpeed = MaxSpeedDefault;
     bIsSprinting = false;
   }
+}
+//TODO make sliidinggear a requirement
+void AAPlatformerCharacter::BeginSlide(const FHitResult& Hit)
+{
+  //unbind self from landed delegate
+  if (LandedDelegate.Contains(this, FName("BeginSlide")))
+  {
+    LandedDelegate.RemoveDynamic(this, &AAPlatformerCharacter::BeginSlide);
+  }
+  UnCrouch();
+  UKismetSystemLibrary::PrintString(this, "Attempting beginslide velocity check");
+  //check xy velocity with this vector
+  FVector LastVelocityVector = GetVelocity();
+  LastVelocityVector.Z = 0;
+
+  if (LastVelocityVector.Size() > 650.f && LastVelocityVector.Size() < 1100.f)
+  {
+    bIsSliding = true;
+    FTimerHandle SlideHeightChangeTimerHandle;
+    GetWorld()->GetTimerManager().SetTimer(SlideHeightChangeTimerHandle, this, &AAPlatformerCharacter::SlideHeightChangeTrue, 0.01, false);
+    PCRef->SetIgnoreMoveInput(true);
+    //turn ground friction lower
+    GetCharacterMovement()->GroundFriction = 0.25;
+    GetCharacterMovement()->BrakingDecelerationWalking = 300.f;
+
+    //boost the character in the direction of SlideForceVector over 0.2s (can cancel with EndSlideCompletely or EndSlideInAir)
+    if (GetWorld()->GetTimerManager().GetTimerRemaining(SlideCooldownTimer)<=0.f)
+    {
+      //set the slideforcevector
+      FHitResult HitResult;
+      FVector StartLocation = GetActorLocation();
+      FVector EndLocation = StartLocation - FVector(0, 0, 20.f);
+      GetWorld()->LineTraceSingleByChannel(HitResult, StartLocation, EndLocation, ECC_Visibility);
+      FVector GroundNormal = HitResult.Normal;
+      SlideForceVector = LastVelocityVector - (FVector::DotProduct(LastVelocityVector, GroundNormal) * GroundNormal);
+      SlideForceVector.Normalize();
+      
+      UKismetSystemLibrary::PrintString(this, "boosting with this vector: "+ SlideForceVector.ToString());
+      GetWorldTimerManager().SetTimer(SlideForceTimerHandle, this, &AAPlatformerCharacter::ApplySlideForce, 0.02, true, 0.f);
+    }
+    //trigger slide cooldown
+    GetWorld()->GetTimerManager().SetTimer(SlideCooldownTimer, this, &AAPlatformerCharacter::ResetSlideCooldown, SlideCooldown, false);
+    //bind end slide to jumpdelegate if not already binded
+    if (!JumpDelegate.Contains(this, FName("EndSlideInAir")))
+    {
+      JumpDelegate.AddDynamic(this, &AAPlatformerCharacter::EndSlideInAir);
+    }
+  }
+}
+
+void AAPlatformerCharacter::ApplySlideForce()
+{
+  FVector FrameLaunchForce = SlideForceVector * 2000000.f * 0.02f / 0.2f;
+  GetCharacterMovement()->AddForce(FrameLaunchForce);
+
+  if (SlideForceTimerCount == 9)
+  {
+    GetWorldTimerManager().ClearTimer(SlideForceTimerHandle);
+    SlideForceTimerCount = 0;
+  }
+  else
+  {
+    SlideForceTimerCount++;
+  }
+}
+
+void AAPlatformerCharacter::EndSlideInAir()
+{
+  UKismetSystemLibrary::PrintString(this, "Attempting to end slide in air");
+  if (!bIsSliding)
+  {
+    return;
+  }
+  UKismetSystemLibrary::PrintString(this, "ending slide in air");
+  PCRef->SetIgnoreMoveInput(false);
+  GetWorld()->GetTimerManager().ClearTimer(SlideForceTimerHandle);
+  GetCharacterMovement()->GroundFriction = 6.f;
+  GetCharacterMovement()->BrakingDecelerationWalking = 2048.f;
+
+  LandedDelegate.AddDynamic(this, &AAPlatformerCharacter::BeginSlide);
+}
+
+void AAPlatformerCharacter::CheckSlideSpeed()
+{
+  if (!bIsSliding)
+  {
+    return;
+  }
+  UKismetSystemLibrary::PrintString(this, "checking slide speed ongoing");
+  if (GetVelocity().Size() < 200.f)
+  {
+    EndSlideCompletely();
+    Crouch();
+  }
+}
+
+void AAPlatformerCharacter::EndSlideCompletely()
+{
+  PCRef->SetIgnoreMoveInput(false);
+  GetWorld()->GetTimerManager().ClearTimer(SlideForceTimerHandle);
+  GetCharacterMovement()->GroundFriction = 6.f;
+  GetCharacterMovement()->BrakingDecelerationWalking = 2048.f;
+  SlideHeightChange(false);
+  bIsSliding = false;
+
+  while (JumpDelegate.Contains(this, FName("EndSlideInAir")))
+  {
+    JumpDelegate.RemoveDynamic(this, &AAPlatformerCharacter::EndSlideInAir);
+  }
+  while (LandedDelegate.Contains(this, FName("BeginSlide")))
+  {
+    LandedDelegate.RemoveDynamic(this, &AAPlatformerCharacter::BeginSlide);
+  }
+}
+
+void AAPlatformerCharacter::SlideHeightChange(bool ShouldBeLow)
+{
+  if (ShouldBeLow)
+  {
+    GetCapsuleComponent()->SetCapsuleHalfHeight(40.f);
+    FirstPersonCameraComponent->SetRelativeLocation(FVector(-10.f, 0.f, 32.f));
+    SetActorLocation(GetActorLocation() - FVector(0, 0, 96.f - 40.f));
+  }
+  else
+  {
+    GetCapsuleComponent()->SetCapsuleHalfHeight(96.f);
+    FirstPersonCameraComponent->SetRelativeLocation(FVector(-10.f, 0.f, 60.f));
+  }
+}
+
+void AAPlatformerCharacter::SlideHeightChangeTrue()
+{
+  SlideHeightChange(true);
 }
 
 void AAPlatformerCharacter::Landing_Implementation(const FHitResult& Hit)
@@ -544,6 +724,15 @@ void AAPlatformerCharacter::OnJumped_Implementation()
 {
   UKismetSystemLibrary::PrintString(this, "timer invalidated");
   UKismetSystemLibrary::K2_ClearAndInvalidateTimerHandle(this, JumpFatigueTimerHandle);
+  JumpDelegate.Broadcast();
+}
+
+void AAPlatformerCharacter::OnWalkingOffLedge_Implementation(const FVector &PreviousFloorImpactNormal, const FVector &PreviousFloorContactNormal, const FVector &PreviousLocation, float TimeDelta)
+{
+  if (bIsSliding)
+  {
+    EndSlideInAir();
+  }
 }
 
 void AAPlatformerCharacter::NotifyHit(UPrimitiveComponent *MyComp, AActor *Other, UPrimitiveComponent *OtherComp, bool bSelfMoved, FVector HitLocation, FVector HitNormal, FVector NormalImpulse, const FHitResult &Hit)
@@ -644,6 +833,8 @@ void AAPlatformerCharacter::RespawnPlayer_Implementation()
   GetCharacterMovement()->GravityScale = 1.f;
   EnableInput(PCRef);
   UnCrouch();
+  EnableMoveInput(FHitResult());
+  SlideHeightChange(false);
   PCRef->bShowMouseCursor = false;
   SetActorLocation(LastCheckpointPos);
   UKismetSystemLibrary::K2_SetTimer(this, "JumpFatigueTimerReset", 0.1, false);
@@ -678,6 +869,11 @@ void AAPlatformerCharacter::SetShoesTrue()
 void AAPlatformerCharacter::SetClimbingTrue()
 {
   bHasClimbingGear = true;
+}
+
+void AAPlatformerCharacter::SetSlidingTrue()
+{
+  bHasSlidingGear = true;
 }
 
 APCThing *AAPlatformerCharacter::GetPCRef()
@@ -720,6 +916,7 @@ void AAPlatformerCharacter::LoadSave()
   {
     bHasShoes = SaveGameInstance->bHasShoes;
     bHasClimbingGear = SaveGameInstance->bHasClimbingGear;
+    bHasSlidingGear = SaveGameInstance->bHasSlidingGear;
     LastCheckpointPos = SaveGameInstance->LastCheckpointPos;
     MaxSpeedDefault = SaveGameInstance->MaxSpeedDefault;
     JumpVelocity = SaveGameInstance->JumpVelocity;
@@ -753,6 +950,7 @@ void AAPlatformerCharacter::CreateSave(FString SaveSlot, int SaveIndex, FString 
       //Set all of the save data
       SaveGameInstance->bHasShoes = bHasShoes;
       SaveGameInstance->bHasClimbingGear = bHasClimbingGear;
+      SaveGameInstance->bHasSlidingGear = bHasSlidingGear;
       if (LastCheckpointRef)
       {
         SaveGameInstance->LastCheckpointPos = LastCheckpointPos;

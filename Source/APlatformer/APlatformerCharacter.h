@@ -18,6 +18,7 @@ class APCThing;
 class UMainGI;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FTickDelegateSignature);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FJumpDelegateSignature);
 
 UCLASS(config=Game)
 class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
@@ -46,10 +47,18 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
   //delegate that is broadcasted every single tick
   UPROPERTY(VisibleAnywhere, BlueprintReadOnly, meta = (AllowPrivateAccess = "true"))
   FTickDelegateSignature TickDelegate;
+
+  //delegate that is broadcasted every jump
+  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, meta = (AllowPrivateAccess = "true"))
+  FJumpDelegateSignature JumpDelegate;
   
   //The max walk speed of the character (not sprinting)
   UPROPERTY(VisibleAnywhere, BlueprintReadOnly, meta = (AllowPrivateAccess = "true"))
   double MaxSpeedDefault = 500.f;
+
+  //The max walk speed of the character (not sprinting)
+  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, meta = (AllowPrivateAccess = "true"))
+  double MaxSlideSpeed = 1000.f;
 
   //The jump z velocity of the character (no fatigue)
   UPROPERTY(VisibleAnywhere, BlueprintReadOnly, meta = (AllowPrivateAccess = "true"))
@@ -107,7 +116,7 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
   UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = Climbing, meta = (AllowPrivateAccess = "true"))
   FTimerHandle ClimbCooldownTimer;
 
-  //time it takes for character to be able to climb again (default 1 second)
+  //time it takes for character to be able to climb again (default 1.25 seconds)
   UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = Climbing, meta = (AllowPrivateAccess = "true"))
   double ClimbCooldown = 1.25f;
 
@@ -183,6 +192,45 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
   UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = Gear, meta = (AllowPrivateAccess = "true"))
   bool bHasClimbingGear = false;
 
+  //If player has sliding gear
+  UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = Gear, meta = (AllowPrivateAccess = "true"))
+  bool bHasSlidingGear = false;
+
+  //If player is currently sliding (does not mean they're on the ground)
+  UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = Sliding, meta = (AllowPrivateAccess = "true"))
+  bool bIsSliding = false;
+
+  //If player can wall jump (only true for a short time), set true when WallJumpDetect detects a wall and set to false if timer runs out or WallJumpDetect
+  //detects player no longer looking at wall (unbinds WallJumpDetect after)
+  UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = Sliding, meta = (AllowPrivateAccess = "true"))
+  bool bCanWallJump = false;
+
+  //If WallJumpDetect has recently triggered true
+  UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = Sliding, meta = (AllowPrivateAccess = "true"))
+  bool bHasHadWallJumpOpportunity = false;
+
+//timer handle for the slide boost cooldown timer
+  UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = Sliding, meta = (AllowPrivateAccess = "true"))
+  FTimerHandle SlideCooldownTimer;
+
+  //timer handle for application of slide boost force, this timer ticks every 0.02s and loops
+  FTimerHandle SlideForceTimerHandle;
+
+  //count for amount of times the slide force timer has applied force
+  uint8_t SlideForceTimerCount = 0;
+
+  //time it takes for character to be able to slide boost again (they will still be able to slide) (default 2 seconds)
+  UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = Sliding, meta = (AllowPrivateAccess = "true"))
+  double SlideCooldown = 2.f;
+
+  //vector with xy dir of current velocity and tangent to ground under
+  UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = Sliding, meta = (AllowPrivateAccess = "true"))
+  FVector SlideForceVector;
+
+  //function to reset slide cooldown by clearing the sliding timer handle
+  UFUNCTION(BlueprintCallable, Category = Sliding)
+  void ResetSlideCooldown();
+
   UPROPERTY()
   FTimerHandle UnusedHandle;
 
@@ -246,6 +294,9 @@ public:
   UFUNCTION()
   void SetClimbingTrue();
 
+  UFUNCTION()
+  void SetSlidingTrue();
+
   //get the PCRef
   UFUNCTION()
   APCThing *GetPCRef();
@@ -263,12 +314,41 @@ protected:
 	/** Called for looking input */
 	void Look(const FInputActionValue& Value);
 
-  //Crouch Functions
+  //Crouch Functions, doubles for sliding
   void CrouchE();
   void UnCrouchE();
 
   //Sprint Function (toggle in between)
   void Sprint();
+
+  //starts sliding, can be queued with CrouchE (binded to Landed) at any point (as long as xy velocity is high enough)
+  //and unbinds self from landed delegate if it's binded, binds EndSlideInAir to jump
+  //while sliding, player wasd input is ignored
+  UFUNCTION(BlueprintCallable, Category = Sliding)
+  void BeginSlide(const FHitResult& Hit = FHitResult());
+
+  //applies one tenth of the total force of one slide boost (ticks ten times if held down completely)
+  UFUNCTION(BlueprintCallable, Category = Sliding)
+  void ApplySlideForce();
+
+  //ends sliding due to jumping or going midair (bIsSliding is still true), binds BeginSlide to landed
+  UFUNCTION(BlueprintCallable, Category = Sliding)
+  void EndSlideInAir();
+
+  //check if the player is sliding and too slow, so go to crouching (return true if too slow so should go to crouching, else false)
+  UFUNCTION(BlueprintCallable, Category = Sliding)
+  void CheckSlideSpeed();
+
+  //ends sliding entirely and sets bIsSliding to false, can be binded to landed by player releasing slide key in midair or immediately called on on ground release
+  //unbinds EndSlideInAir from jump if bound
+  UFUNCTION(BlueprintCallable, Category = Sliding)
+  void EndSlideCompletely();
+
+  //changes the height of the character to crouching height when sliding, true means low height false means normal
+  UFUNCTION(BlueprintCallable, Category = Sliding)
+  void SlideHeightChange(bool ShouldBeLow);
+
+  void SlideHeightChangeTrue();
 
   //Landing function called on LandedDelegate.Broadcast()
 	UFUNCTION(BlueprintNativeEvent)
@@ -280,6 +360,8 @@ protected:
 
   //override of OnJumped Function
   virtual void OnJumped_Implementation() override;
+
+  virtual void OnWalkingOffLedge_Implementation(const FVector& PreviousFloorImpactNormal, const FVector& PreviousFloorContactNormal, const FVector& PreviousLocation, float TimeDelta) override;
 
   //override of Notify Hit (still calls receive hit in BP)
   virtual void NotifyHit(class UPrimitiveComponent* MyComp, AActor* Other, class UPrimitiveComponent* OtherComp, bool bSelfMoved, FVector HitLocation, FVector HitNormal, FVector NormalImpulse, const FHitResult& Hit) override;
