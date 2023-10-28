@@ -222,11 +222,7 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
   //time it takes for character to be able to slide boost again (they will still be able to slide) (default 2 seconds)
   UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = Sliding, meta = (AllowPrivateAccess = "true"))
   double SlideCooldown = 2.f;
-
-  //vector with xy dir of current velocity and tangent to ground under
-  UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = Sliding, meta = (AllowPrivateAccess = "true"))
-  FVector SlideForceVector;
-
+  
   //function to reset slide cooldown by clearing the sliding timer handle
   UFUNCTION(BlueprintCallable, Category = Sliding)
   void ResetSlideCooldown();
@@ -328,10 +324,20 @@ protected:
   void BeginSlide(const FHitResult& Hit = FHitResult());
 
   //applies one tenth of the total force of one slide boost (ticks ten times if held down completely)
+  //increased slide force depending on how much the vector slides downward, increased up to 40%, decreased down to 100%
   UFUNCTION(BlueprintCallable, Category = Sliding)
   void ApplySlideForce();
+  
+  //static struct solely used to store data for applyslideforce
+  struct SlideForceStruct
+  {
+    FVector FrameLaunchForce = FVector();
+    FVector SlideForceVector = FVector();
+  };
 
+  SlideForceStruct SlideForce;
   //ends sliding due to jumping or going midair (bIsSliding is still true), binds BeginSlide to landed
+  //adds walljumpdetect to tickdelegate until unbinded by landed (or maybe wallrun initiate)
   UFUNCTION(BlueprintCallable, Category = Sliding)
   void EndSlideInAir();
 

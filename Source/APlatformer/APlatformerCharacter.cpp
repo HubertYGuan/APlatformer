@@ -567,7 +567,7 @@ void AAPlatformerCharacter::Sprint()
     bIsSprinting = false;
   }
 }
-//TODO make sliidinggear a requirement
+
 void AAPlatformerCharacter::BeginSlide(const FHitResult& Hit)
 {
   //unbind self from landed delegate
@@ -597,13 +597,14 @@ void AAPlatformerCharacter::BeginSlide(const FHitResult& Hit)
       //set the slideforcevector
       FHitResult HitResult;
       FVector StartLocation = GetActorLocation();
-      FVector EndLocation = StartLocation - FVector(0, 0, 20.f);
+      FVector EndLocation = StartLocation - FVector(0, 0, 150.f);
       GetWorld()->LineTraceSingleByChannel(HitResult, StartLocation, EndLocation, ECC_Visibility);
       FVector GroundNormal = HitResult.Normal;
-      SlideForceVector = LastVelocityVector - (FVector::DotProduct(LastVelocityVector, GroundNormal) * GroundNormal);
-      SlideForceVector.Normalize();
+      UKismetSystemLibrary::PrintString(this, GroundNormal.ToString());
+      SlideForce.SlideForceVector = LastVelocityVector - (FVector::DotProduct(LastVelocityVector, GroundNormal) * GroundNormal);
+      SlideForce.SlideForceVector.Normalize();
       
-      UKismetSystemLibrary::PrintString(this, "boosting with this vector: "+ SlideForceVector.ToString());
+      UKismetSystemLibrary::PrintString(this, "boosting with this vector: "+ SlideForce.SlideForceVector.ToString());
       GetWorldTimerManager().SetTimer(SlideForceTimerHandle, this, &AAPlatformerCharacter::ApplySlideForce, 0.02, true, 0.f);
     }
     //trigger slide cooldown
@@ -618,8 +619,26 @@ void AAPlatformerCharacter::BeginSlide(const FHitResult& Hit)
 
 void AAPlatformerCharacter::ApplySlideForce()
 {
-  FVector FrameLaunchForce = SlideForceVector * 2000000.f * 0.02f / 0.2f;
-  GetCharacterMovement()->AddForce(FrameLaunchForce);
+  if (SlideForceTimerCount == 0)
+  {
+  FVector SlideForceVectorWithoutZ = SlideForce.SlideForceVector;
+  int PosOrNegAngle = UKismetMathLibrary::SignOfFloat(SlideForceVectorWithoutZ.Z) * -1;
+  SlideForceVectorWithoutZ.Z = 0;
+  SlideForceVectorWithoutZ.Normalize();
+  FVector FrameLaunchForce = SlideForceVectorWithoutZ * 2750000.f * 0.02f / 0.2f;
+  double SlideForceAngle = UKismetMathLibrary::Acos(FVector::DotProduct(SlideForce.SlideForceVector, SlideForceVectorWithoutZ)) * PosOrNegAngle;
+  //multiplier is based on ln(angle+1)*0.69 + 1 where it's angle between SlideForceAngle and equivalent vector on ground
+  double Multiplier = UKismetMathLibrary::ClampAngle((UKismetMathLibrary::Loge(SlideForceAngle+1.f) * 0.69) + 1.f, 0.f, 1.4);
+  if (PosOrNegAngle == -1)
+  {
+    Multiplier *= 0.3;
+  }
+  UKismetSystemLibrary::PrintString(this, "Mult:"+FString::SanitizeFloat(Multiplier)+"\nAngle:"+FString::SanitizeFloat(SlideForceAngle));
+  FrameLaunchForce *= Multiplier;
+  SlideForce.FrameLaunchForce = FrameLaunchForce;
+  }
+  GetCharacterMovement()->AddForce(SlideForce.FrameLaunchForce);
+  UKismetSystemLibrary::PrintString(this, "Boosting with force "+ SlideForce.FrameLaunchForce.ToString() + "\nmagnitude: " + FString::SanitizeFloat(SlideForce.FrameLaunchForce.Size()));
 
   if (SlideForceTimerCount == 9)
   {
@@ -642,6 +661,7 @@ void AAPlatformerCharacter::EndSlideInAir()
   UKismetSystemLibrary::PrintString(this, "ending slide in air");
   PCRef->SetIgnoreMoveInput(false);
   GetWorld()->GetTimerManager().ClearTimer(SlideForceTimerHandle);
+  SlideForceTimerCount = 0;
   GetCharacterMovement()->GroundFriction = 6.f;
   GetCharacterMovement()->BrakingDecelerationWalking = 2048.f;
 
@@ -654,7 +674,6 @@ void AAPlatformerCharacter::CheckSlideSpeed()
   {
     return;
   }
-  UKismetSystemLibrary::PrintString(this, "checking slide speed ongoing");
   if (GetVelocity().Size() < 200.f)
   {
     EndSlideCompletely();
@@ -666,6 +685,7 @@ void AAPlatformerCharacter::EndSlideCompletely()
 {
   PCRef->SetIgnoreMoveInput(false);
   GetWorld()->GetTimerManager().ClearTimer(SlideForceTimerHandle);
+  SlideForceTimerCount = 0;
   GetCharacterMovement()->GroundFriction = 6.f;
   GetCharacterMovement()->BrakingDecelerationWalking = 2048.f;
   SlideHeightChange(false);
