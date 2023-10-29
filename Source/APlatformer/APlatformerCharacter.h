@@ -200,14 +200,18 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
   UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = Sliding, meta = (AllowPrivateAccess = "true"))
   bool bIsSliding = false;
 
-  //If player can wall jump (only true for a short time), set true when WallJumpDetect detects a wall and set to false if timer runs out or WallJumpDetect
-  //detects player no longer looking at wall (unbinds WallJumpDetect after)
-  UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = Sliding, meta = (AllowPrivateAccess = "true"))
+  //If player can wall jump (only true for a short time), set true when WallJumpCompute detects a wall and set to false if timer runs out or WallJumpDetect
+  //detects player no longer looking at wall (unbinds WallJumpCompute after)
+  UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = WallJump, meta = (AllowPrivateAccess = "true"))
   bool bCanWallJump = false;
 
-  //If WallJumpDetect has recently triggered true
-  UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = Sliding, meta = (AllowPrivateAccess = "true"))
-  bool bHasHadWallJumpOpportunity = false;
+  //If WallJumpDetect has recently triggered true then false
+  UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = WallJump, meta = (AllowPrivateAccess = "true"))
+  bool bHadWallJumpOpportunity = false;
+
+  //timer handle for timer for small window of walljump availability
+  UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = WallJump, meta = (AllowPrivateAccess = "true"))
+  FTimerHandle WallJumpWindowHandle;
 
 //timer handle for the slide boost cooldown timer
   UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = Sliding, meta = (AllowPrivateAccess = "true"))
@@ -337,7 +341,7 @@ protected:
 
   SlideForceStruct SlideForce;
   //ends sliding due to jumping or going midair (bIsSliding is still true), binds BeginSlide to landed
-  //adds walljumpdetect to tickdelegate until unbinded by landed (or maybe wallrun initiate)
+  //adds WallJumpCompute to tickdelegate until unbinded by landed (or maybe wallrun initiate)
   UFUNCTION(BlueprintCallable, Category = Sliding)
   void EndSlideInAir();
 
@@ -355,6 +359,50 @@ protected:
   void SlideHeightChange(bool ShouldBeLow);
 
   void SlideHeightChangeTrue();
+
+  //triggers wall jump
+  UFUNCTION(BlueprintCallable, Category = WallJump)
+  void WallJump();
+
+  //detects if wall is available to wall jump, if so and then false, sets bHadWallJumpOpportunity true
+  UFUNCTION(BlueprintCallable, Category = WallJump)
+  bool WallJumpDetect(bool WriteToStruct = false);
+
+  bool WallJumpDetectStrict();
+
+  //binded to TickDelegate by EndSlideInAir (can cancel slide midair and still walljump)
+  //unbinded by landed or timer 
+  UFUNCTION(BlueprintCallable, Category = WallJump)
+  void WallJumpCompute();
+
+  UFUNCTION(BlueprintCallable, Category = WallJump)
+  void WallJumpSlowDown();
+
+  UFUNCTION(Category = WallJump)
+  void SetWallJumpOpportunityFalse(const FHitResult& Hit);
+
+  //used to calculate walljump slowdown and launch vectors
+  struct WallJumpStruct
+  {
+    //velocity vector right before going on wall, has a z value
+    FVector PlayerVelocity = FVector();
+    //no z value
+    FVector PlayerVelocityXY = FVector();
+    
+    FVector WallNormal = FVector();
+
+    FTimerHandle WallJumpSlowDownHandle = FTimerHandle();
+
+    FVector LaunchVector = FVector();
+
+    int SlowTickCount = 0;
+  };
+
+  WallJumpStruct WallJump0;
+
+  //binded to WallJumpWindowHandle and landed by endslideinair
+  UFUNCTION(BlueprintCallable, Category = WallJump)
+  void UnbindWallJumpDetect();
 
   //Landing function called on LandedDelegate.Broadcast()
 	UFUNCTION(BlueprintNativeEvent)

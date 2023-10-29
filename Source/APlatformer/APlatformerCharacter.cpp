@@ -209,9 +209,8 @@ bool AAPlatformerCharacter::ForwardWallDetect()
   FVector StartLocation = GetActorLocation();
   FVector EndLocation = StartLocation + GetActorForwardVector()*40.f;
 
-  FCollisionShape MyCapsule = FCollisionShape::MakeCapsule(0.5, GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
+  FCollisionShape MyCapsule = FCollisionShape::MakeCapsule(0.5, GetCapsuleComponent()->GetScaledCapsuleHalfHeight()*0.95);
 
-  // Perform the capsule trace
   bool bHit = GetWorld()->SweepMultiByChannel(HitResults, StartLocation, EndLocation, FQuat::Identity, ECC_Visibility, MyCapsule);
 
   if (bHit)
@@ -225,6 +224,10 @@ bool AAPlatformerCharacter::ForwardWallDetect()
         continue;
       }
       bHasHitActor = true;
+      if (UKismetMathLibrary::Abs(Hit.Normal.Z)>0.4)
+      {
+        return false;
+      }
       if (HitActor->ActorHasTag(FName("NotClimbable")))
       {
         return false;
@@ -436,6 +439,8 @@ void AAPlatformerCharacter::SetupPlayerInputComponent(class UInputComponent* Pla
 		//Jumping
 		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Started, this, &ACharacter::Jump);
 		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Ongoing, this, &ACharacter::StopJumping);
+    //WallJump
+    EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Started, this, &AAPlatformerCharacter::WallJump);
     //Crouching and sliding
 		EnhancedInputComponent->BindAction(CrouchAction, ETriggerEvent::Started, this, &AAPlatformerCharacter::CrouchE);
 		EnhancedInputComponent->BindAction(CrouchAction, ETriggerEvent::Completed, this, &AAPlatformerCharacter::UnCrouchE);
@@ -578,7 +583,7 @@ void AAPlatformerCharacter::BeginSlide(const FHitResult& Hit)
   UnCrouch();
   UKismetSystemLibrary::PrintString(this, "Attempting beginslide velocity check");
   //check xy velocity with this vector
-  FVector LastVelocityVector = GetVelocity();
+  FVector LastVelocityVector = GetMovementComponent()->Velocity;
   LastVelocityVector.Z = 0;
 
   if (LastVelocityVector.Size() > 650.f && LastVelocityVector.Size() < 1100.f)
@@ -666,6 +671,7 @@ void AAPlatformerCharacter::EndSlideInAir()
   GetCharacterMovement()->BrakingDecelerationWalking = 2048.f;
 
   LandedDelegate.AddDynamic(this, &AAPlatformerCharacter::BeginSlide);
+  TickDelegate.AddDynamic(this, &AAPlatformerCharacter::WallJumpCompute);
 }
 
 void AAPlatformerCharacter::CheckSlideSpeed()
@@ -674,7 +680,7 @@ void AAPlatformerCharacter::CheckSlideSpeed()
   {
     return;
   }
-  if (GetVelocity().Size() < 200.f)
+  if (GetMovementComponent()->Velocity.Size() < 200.f)
   {
     EndSlideCompletely();
     Crouch();
@@ -719,6 +725,190 @@ void AAPlatformerCharacter::SlideHeightChange(bool ShouldBeLow)
 void AAPlatformerCharacter::SlideHeightChangeTrue()
 {
   SlideHeightChange(true);
+}
+
+void AAPlatformerCharacter::WallJump()
+{
+  if (!bCanWallJump)
+  {
+    return;
+  }
+  if (!WallJumpDetectStrict())
+  {
+    return;
+  }
+  UKismetSystemLibrary::PrintString(this, "trying to wall jump");
+  //calc xy direction
+  FVector LaunchVector = WallJump0.PlayerVelocityXY - (WallJump0.WallNormal * (2 * FVector::DotProduct(WallJump0.PlayerVelocityXY, WallJump0.WallNormal)));
+  //max out xy at 3000 magnitude
+  if (LaunchVector.Size() > 700.f)
+  {
+    LaunchVector.Normalize();
+    LaunchVector *= 700.f;
+  }
+  //the wall could be slanted up or down slightly so += is used
+  LaunchVector.Z += 400.f;
+  //UKismetMathLibrary::ClampAngle((900.f + WallJump0.PlayerVelocity.Z), 150.f, 1100.f)
+  //can't wall jump if moving too fast
+  if (GetMovementComponent()->Velocity.Size()<600.f)
+  {
+    UKismetSystemLibrary::PrintString(this, "wall jump successful");
+    LaunchCharacter(LaunchVector, false, false);
+  }
+  bCanWallJump = false;
+  bHadWallJumpOpportunity = true;
+  if (!LandedDelegate.Contains(this, FName("SetWallJumpOpportunityFalse")))
+  {
+    LandedDelegate.AddDynamic(this, &AAPlatformerCharacter::SetWallJumpOpportunityFalse);
+  }
+}
+
+bool AAPlatformerCharacter::WallJumpDetect(bool WriteToStruct)
+{
+  //copied from forwardwalldetect, but with wider radius for more leeway
+  //also only works if capsule hits one actor, I'm not doing walljump off of multiple walls at once
+  TArray<FHitResult> HitResults;
+  FVector StartLocation = GetActorLocation();
+  FVector EndLocation = StartLocation + (GetActorForwardVector() * 20.f);
+
+  FCollisionShape MyCapsule = FCollisionShape::MakeCapsule(39.f, 90.f);
+
+  bool bHit = GetWorld()->SweepMultiByChannel(HitResults, StartLocation, EndLocation, FQuat::Identity, ECC_Visibility, MyCapsule);
+
+  if (bHit)
+  {
+    if (HitResults.Num() != 1)
+    {
+      return false;
+    }
+    for (auto& Hit : HitResults)
+    {
+      AActor* HitActor = Hit.GetActor();
+      if (HitActor == nullptr)
+      {
+        return false;
+      }
+      if (HitActor->ActorHasTag(FName("NotClimbable")))
+      {
+        return false;
+      }
+      if (UKismetMathLibrary::Abs(Hit.Normal.Z)>0.4)
+      {
+        return false;
+      }
+      if (WriteToStruct)
+      {
+      WallJump0.WallNormal = Hit.Normal;
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
+bool AAPlatformerCharacter::WallJumpDetectStrict()
+{
+  TArray<FHitResult> HitResults;
+  FVector StartLocation = GetActorLocation();
+  FVector EndLocation = StartLocation + (GetActorForwardVector() * 32.5);
+
+  FCollisionShape MyCapsule = FCollisionShape::MakeCapsule(10.f, 90.f);
+
+  bool bHit = GetWorld()->SweepMultiByChannel(HitResults, StartLocation, EndLocation, FQuat::Identity, ECC_Visibility, MyCapsule);
+
+  if (bHit)
+  {
+    if (HitResults.Num() != 1)
+    {
+      return false;
+    }
+    for (auto& Hit : HitResults)
+    {
+      AActor* HitActor = Hit.GetActor();
+      if (HitActor == nullptr)
+      {
+        return false;
+      }
+      if (HitActor->ActorHasTag(FName("NotClimbable")))
+      {
+        return false;
+      }
+      if (UKismetMathLibrary::Abs(Hit.Normal.Z)>0.4)
+      {
+        return false;
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
+void AAPlatformerCharacter::WallJumpCompute()
+{
+  if (bCanWallJump)
+  {
+    if (!WallJumpDetect())
+    {
+      bHadWallJumpOpportunity = true;
+      if (!LandedDelegate.Contains(this, FName("SetWallJumpOpportunityFalse")))
+      {
+        LandedDelegate.AddDynamic(this, &AAPlatformerCharacter::SetWallJumpOpportunityFalse);
+      }
+      GetWorld()->GetTimerManager().ClearTimer(WallJumpWindowHandle);
+      if (TickDelegate.Contains(this, FName("WallJumpCompute")))
+      {
+        TickDelegate.RemoveDynamic(this, &AAPlatformerCharacter::WallJumpCompute);
+      }
+      bCanWallJump = false;
+    }
+    return;
+  }
+  if (bHadWallJumpOpportunity)
+  {
+    return;
+  }
+  if (WallJumpDetect(true))
+  {
+    UKismetSystemLibrary::PrintString(this, "WallJump opportunity detected and starting timer");
+    //set vector data
+    WallJump0.PlayerVelocity = GetMovementComponent()->Velocity;
+    WallJump0.PlayerVelocityXY = FVector(GetMovementComponent()->Velocity.X, GetMovementComponent()->Velocity.Y, 0.f);
+    //make player cling to wall with looping applying force (over 0.1s)
+    GetWorld()->GetTimerManager().SetTimer(WallJump0.WallJumpSlowDownHandle, this, &AAPlatformerCharacter::WallJumpSlowDown, 0.01, true);
+    bCanWallJump = true;
+    //start walljumpwindow
+    GetWorld()->GetTimerManager().SetTimer(WallJumpWindowHandle, this, &AAPlatformerCharacter::UnbindWallJumpDetect, 0.2, false);
+  } 
+}
+
+void AAPlatformerCharacter::WallJumpSlowDown()
+{
+  if (WallJump0.SlowTickCount == 11)
+  {
+    WallJump0.SlowTickCount = 0;
+    GetWorld()->GetTimerManager().ClearTimer(WallJump0.WallJumpSlowDownHandle);
+    return;
+  }
+  UKismetSystemLibrary::PrintString(this, "slowing down for wall jump");
+  //rotated pi/2 ccw in xy direction from normal vector
+  FVector ParallelVector = FVector(WallJump0.WallNormal.Y * -1, WallJump0.WallNormal.X, WallJump0.WallNormal.Z);
+  FVector SlowVector = ParallelVector * (-1 * FVector::DotProduct(ParallelVector, WallJump0.PlayerVelocity));
+  LaunchCharacter(SlowVector * 0.11, false, false);
+  WallJump0.SlowTickCount++;
+}
+
+void AAPlatformerCharacter::SetWallJumpOpportunityFalse(const FHitResult &Hit)
+{
+  bHadWallJumpOpportunity = false;
+}
+
+void AAPlatformerCharacter::UnbindWallJumpDetect()
+{
+  if (TickDelegate.Contains(this, FName("WallJumpCompute")))
+  {
+    TickDelegate.RemoveDynamic(this, &AAPlatformerCharacter::WallJumpCompute);
+  }
+  bCanWallJump = false;
 }
 
 void AAPlatformerCharacter::Landing_Implementation(const FHitResult& Hit)
