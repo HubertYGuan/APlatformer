@@ -37,6 +37,10 @@ void AAPlatformerCharacter::Climb(const FInputActionValue &InputActionValue)
   {
     return;
   }
+  if (bClimbCooldown)
+  {
+    return;
+  }
   //climbing shouldn't happen when movement is disabled
   if (PCRef->IsMoveInputIgnored())
   {
@@ -100,10 +104,6 @@ void AAPlatformerCharacter::Climb(const FInputActionValue &InputActionValue)
     if (RemainingTime==69420.f)
     {
       return;
-    }
-    else
-    {
-      UKismetSystemLibrary::PrintString(this, FString::SanitizeFloat(RemainingTime));
     }
     if (!ForwardWallDetect())
     {
@@ -215,15 +215,17 @@ bool AAPlatformerCharacter::ForwardWallDetect()
 
   if (bHit)
   {
-    bool bHasHitActor;
+    if (HitResults.Num() != 1)
+    {
+      return false;
+    }
     for (auto& Hit : HitResults)
     {
       AActor* HitActor = Hit.GetActor();
       if (HitActor == nullptr)
       {
-        continue;
+        return false;
       }
-      bHasHitActor = true;
       if (UKismetMathLibrary::Abs(Hit.Normal.Z)>0.4)
       {
         return false;
@@ -232,15 +234,12 @@ bool AAPlatformerCharacter::ForwardWallDetect()
       {
         return false;
       }
+      LastClimbNormal = Hit.Normal;
     }
-    if (bHasHitActor)
-    {
-      return true;
-    }
+    return true;
   }
-
-  return false;
-}
+    return false;
+  }
 
 bool AAPlatformerCharacter::LedgeDetect()
 {
@@ -287,22 +286,35 @@ void AAPlatformerCharacter::LedgeMantle()
     TickDelegate.RemoveDynamic(this, &AAPlatformerCharacter::LedgeMantle);
     TickDelegate.RemoveDynamic(this, &AAPlatformerCharacter::LedgeHang);
     bIsOnLedge = false;
-    //disable wasd player input until mantle is complete (also call stopclimbing)
+    //(don't disable wasd) until mantle is complete (also call stopclimbing)
     StopClimbing();
-    PCRef->SetIgnoreMoveInput(true);
+
+    bClimbCooldown = true;
     SetIgnoreStrafing(false);
     SetIgnoreForward(false);
-    //bind re-enabling input to landing delegate
-    LandedDelegate.AddDynamic(this, &AAPlatformerCharacter::EnableMoveInput);
-    //move root component i.e. capsule component to correct landing position (ignore some minor clipping)
-    FLatentActionInfo LatentInfo;
-    LatentInfo.CallbackTarget = this;
-    LatentInfo.ExecutionFunction = "MoveCapsule";
-    LatentInfo.Linkage = 0;
-    LatentInfo.UUID = 1;
-    FVector NewLocation = LedgePos + (GetActorForwardVector()*50.f) + FVector(0.f, 0.f, 98.f);
-    UKismetSystemLibrary::MoveComponentTo(GetCapsuleComponent(), NewLocation, FRotator::ZeroRotator, false, false, 0.5, false, EMoveComponentAction::Type::Move, LatentInfo);
+
+    //FLatentActionInfo LatentInfo;
+    //LatentInfo.CallbackTarget = this;
+    //LatentInfo.ExecutionFunction = "MoveCapsule";
+    //LatentInfo.Linkage = 0;
+    //LatentInfo.UUID = 1;
+    MantleTarget = LedgePos + (LastClimbNormal*-30.f) + FVector(0.f, 0.f, 69.f);
+    //previously: UKismetSystemLibrary::MoveComponentTo(GetCapsuleComponent(), MantleTarget, FRotator::ZeroRotator, false, false, 0.5, false, EMoveComponentAction::Type::Move, LatentInfo);
+    
+    //play blueprint defined mantle timeline since c++ timelines are bad
+    MantleTimelinePlay();
+
+    GetWorld()->GetTimerManager().SetTimer(UnusedHandle, this, &AAPlatformerCharacter::SetClimbCooldownFalse, 0.8, false);
+    //superglide true in the last 0.1s of mantle if sliding gear
+    if (!bHasSlidingGear || !bIsSprinting) {return;}
+    GetWorld()->GetTimerManager().SetTimer(SuperGlideWindowStartHandle, this, &AAPlatformerCharacter::SetCanSuperGlideTrue, 0.4, false);
   }
+}
+
+void AAPlatformerCharacter::UpdatePosition(float Value)
+{
+  FVector NewLocation = FMath::Lerp(GetActorLocation(), MantleTarget, Value);
+  SetActorLocation(NewLocation);
 }
 
 void AAPlatformerCharacter::StopLedgeHangAndClimbing(const FInputActionValue &InputActionValue)
@@ -437,7 +449,7 @@ void AAPlatformerCharacter::SetupPlayerInputComponent(class UInputComponent* Pla
 	if (UEnhancedInputComponent* EnhancedInputComponent = CastChecked<UEnhancedInputComponent>(PlayerInputComponent))
 	{
 		//Jumping
-		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Started, this, &ACharacter::Jump);
+		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Started, this, &AAPlatformerCharacter::JumpE);
 		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Ongoing, this, &ACharacter::StopJumping);
     //WallJump
     EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Started, this, &AAPlatformerCharacter::WallJump);
@@ -490,6 +502,7 @@ void AAPlatformerCharacter::Move(const FInputActionValue& Value)
 
 		AddMovementInput(GetActorRightVector(), MovementVector.X * StrafeMultiplier);
 	}
+  LastMoveInput = MovementVector;
 }
 
 void AAPlatformerCharacter::Look(const FInputActionValue& Value)
@@ -503,6 +516,17 @@ void AAPlatformerCharacter::Look(const FInputActionValue& Value)
 		AddControllerYawInput(LookAxisVector.X);
 		AddControllerPitchInput(LookAxisVector.Y);
 	}
+}
+
+void AAPlatformerCharacter::JumpE()
+{
+  Jump();
+  if (bSuperGlideSlideQueued)
+  {
+    bSuperGlideSlideQueued = false;
+    UKismetSystemLibrary::PrintString(this, "Superglide successful");
+    SuperGlide();
+  }
 }
 
 void AAPlatformerCharacter::CrouchE()
@@ -526,6 +550,13 @@ void AAPlatformerCharacter::CrouchE()
   if (!bIsSliding)
   {
     Crouch();
+  }
+  if (bCanSuperGlide)
+  {
+    bCanSuperGlide = false;
+    bSuperGlideSlideQueued = true;
+    UKismetSystemLibrary::PrintString(this, "Superglide slide queued");
+    GetWorld()->GetTimerManager().SetTimer(SuperglideInitiateHandle, this, &AAPlatformerCharacter::SetSuperGlideSlideQueuedFalse, 0.03, false);
   }
 }
 
@@ -586,7 +617,7 @@ void AAPlatformerCharacter::BeginSlide(const FHitResult& Hit)
   FVector LastVelocityVector = GetMovementComponent()->Velocity;
   LastVelocityVector.Z = 0;
 
-  if (LastVelocityVector.Size() > 650.f && LastVelocityVector.Size() < 1100.f)
+  if (LastVelocityVector.Size() > 75.f && bIsSprinting)
   {
     bIsSliding = true;
     FTimerHandle SlideHeightChangeTimerHandle;
@@ -597,7 +628,7 @@ void AAPlatformerCharacter::BeginSlide(const FHitResult& Hit)
     GetCharacterMovement()->BrakingDecelerationWalking = 300.f;
 
     //boost the character in the direction of SlideForceVector over 0.2s (can cancel with EndSlideCompletely or EndSlideInAir)
-    if (GetWorld()->GetTimerManager().GetTimerRemaining(SlideCooldownTimer)<=0.f)
+    if (GetWorld()->GetTimerManager().GetTimerRemaining(SlideCooldownTimer)<=0.f && LastVelocityVector.Size() < 1100.f)
     {
       //set the slideforcevector
       FHitResult HitResult;
@@ -733,6 +764,14 @@ void AAPlatformerCharacter::WallJump()
   {
     return;
   }
+  if (bIsClimbing)
+  {
+    return;
+  }
+  if (bCanSuperGlide || bSuperGlideSlideQueued)
+  {
+    return;
+  }
   if (!WallJumpDetectStrict())
   {
     return;
@@ -771,7 +810,7 @@ bool AAPlatformerCharacter::WallJumpDetect(bool WriteToStruct)
   FVector StartLocation = GetActorLocation();
   FVector EndLocation = StartLocation + (GetActorForwardVector() * 20.f);
 
-  FCollisionShape MyCapsule = FCollisionShape::MakeCapsule(39.f, 90.f);
+  FCollisionShape MyCapsule = FCollisionShape::MakeCapsule(39.f, 50.f);
 
   bool bHit = GetWorld()->SweepMultiByChannel(HitResults, StartLocation, EndLocation, FQuat::Identity, ECC_Visibility, MyCapsule);
 
@@ -911,6 +950,31 @@ void AAPlatformerCharacter::UnbindWallJumpDetect()
   bCanWallJump = false;
 }
 
+void AAPlatformerCharacter::SuperGlide()
+{
+  MantleTimelineStop();
+  //rotated pi/2 ccw in xy direction from lastclimbnormal
+  //also superglide z velo is fixed to jumpvelo boost
+  //this isn't even the rightward vector but I'm not making this a physics z mech problem
+  FVector LastClimbRight = FVector(LastClimbNormal.Y * -1, LastClimbNormal.X, 0.f);
+  LastClimbRight.Normalize();
+  FVector LastClimbForward = LastClimbNormal * -1.f;
+  LastClimbForward.Z = 0.f;
+  LastClimbForward.Normalize();
+
+  FVector SuperGlideVector = ((LastMoveInput.X * -1) * LastClimbRight) + (LastMoveInput.Y * LastClimbForward);
+  SuperGlideVector.Normalize();
+  SuperGlideVector *= MaxSlideSpeed;
+  SuperGlideVector.Z = JumpVelocity;
+  LaunchCharacter(SuperGlideVector, false, false);
+}
+
+void AAPlatformerCharacter::SetCanSuperGlideTrue()
+{
+  UKismetSystemLibrary::PrintString(this, "Superglide possible");
+  bCanSuperGlide = true;
+  GetWorld()->GetTimerManager().SetTimer(SuperGlideWindowEndHandle, this, &AAPlatformerCharacter::SetCanSuperGlideFalse, 0.05, false);
+}
 void AAPlatformerCharacter::Landing_Implementation(const FHitResult& Hit)
 {
   //calc the jump height
@@ -922,6 +986,8 @@ void AAPlatformerCharacter::Landing_Implementation(const FHitResult& Hit)
   StopClimbing();
   ResetClimbCooldown();
   GetWorld()->GetTimerManager().ClearTimer(ClimbCooldownTimer);
+  bCanWallJump = false;
+  UnbindWallJumpDetect();
 }
 
 void AAPlatformerCharacter::JumpPadBoost_Implementation(double VelocityZ)
@@ -949,8 +1015,8 @@ void AAPlatformerCharacter::NotifyHit(UPrimitiveComponent *MyComp, AActor *Other
 {
   TMap<FName, int> TagsMap;
   //Add all of the possible tags
-  TagsMap.Add("Hazard", 1);
-  TagsMap.Add("Checkpoint", 2);
+  TagsMap.Add(FName("Hazard"), 1);
+  TagsMap.Add(FName("Checkpoint"), 2);
 
   for (FName Name : Other->Tags)
   {

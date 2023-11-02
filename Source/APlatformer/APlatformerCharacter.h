@@ -97,6 +97,9 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
   UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = Climbing, meta = (AllowPrivateAccess = "true"))
   bool bIsClimbing = false;
 
+  UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = Climbing, meta = (AllowPrivateAccess = "true"))
+  bool bClimbCooldown = false;
+
   //if near ledge (can hang on ledge or go on top)
   UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = Climbing, meta = (AllowPrivateAccess = "true"))
   bool bIsOnLedge = false;
@@ -150,12 +153,21 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
   bool LedgeDetect();
 
   //sets a minimum z height for player and disables sideways movement, cancel by jumping or pressing back
-  UFUNCTION(BlueprintCallable, Category = Climbing)
+  UFUNCTION()
   void LedgeHang();
 
   //detects if player reaches certain Z threshold and disables all climbing and ledge stuff when they do
-  UFUNCTION(BlueprintCallable, Category = Climbing)
+  UFUNCTION()
   void LedgeMantle();
+
+  UPROPERTY(BlueprintReadOnly, Category = Climbing, meta = (AllowPrivateAccess = "true"))
+  FVector MantleTarget;
+
+  UPROPERTY(BlueprintReadOnly, Category = Climbing, meta = (AllowPrivateAccess = "true"))
+  FVector LastClimbNormal;
+
+  UPROPERTY(BlueprintReadOnly, Category = Climbing, meta = (AllowPrivateAccess = "true"))
+  FVector MantleStart;
 
   //called when jump, completely stops all ledge hanging and climbing
   void StopLedgeHangAndClimbing(const FInputActionValue& InputActionValue);
@@ -209,6 +221,11 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
   UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = WallJump, meta = (AllowPrivateAccess = "true"))
   bool bHadWallJumpOpportunity = false;
 
+  UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = WallJump, meta = (AllowPrivateAccess = "true"))
+  bool bCanSuperGlide = false;
+
+  bool bSuperGlideSlideQueued = false;
+
   //timer handle for timer for small window of walljump availability
   UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = WallJump, meta = (AllowPrivateAccess = "true"))
   FTimerHandle WallJumpWindowHandle;
@@ -258,7 +275,10 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=Input, meta=(AllowPrivateAccess = "true"))
 	class UInputAction* MoveAction;
 
-	
+	//set in blueprint
+  UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Climbing, meta=(AllowPrivateAccess = "true"))
+  UCurveFloat *MantleCurve;
+
 public:
 	AAPlatformerCharacter();
 
@@ -313,6 +333,19 @@ protected:
 
 	/** Called for looking input */
 	void Look(const FInputActionValue& Value);
+
+  void JumpE();
+
+  FTimerHandle SuperglideInitiateHandle;
+
+  UFUNCTION(BlueprintCallable)
+  void UpdatePosition(float Value);
+
+  UFUNCTION(BlueprintImplementableEvent)
+  void MantleTimelinePlay();
+
+  UFUNCTION(BlueprintImplementableEvent)
+  void MantleTimelineStop();
 
   //Crouch Functions, doubles for sliding
   void CrouchE();
@@ -403,6 +436,22 @@ protected:
   //binded to WallJumpWindowHandle and landed by endslideinair
   UFUNCTION(BlueprintCallable, Category = WallJump)
   void UnbindWallJumpDetect();
+
+  //launches the player up and in direction of input (hard to do just like in apex and titanfall, but not as hard)
+  UFUNCTION(BlueprintCallable, Category = Superglide)
+  void SuperGlide();
+
+  void SetSuperGlideSlideQueuedFalse() {bSuperGlideSlideQueued = false;};
+
+  void SetClimbCooldownFalse() {bClimbCooldown = false;};
+
+  FTimerHandle SuperGlideWindowStartHandle;
+
+  void SetCanSuperGlideTrue();
+
+  FTimerHandle SuperGlideWindowEndHandle;
+
+  void SetCanSuperGlideFalse() {bCanSuperGlide = false;};
 
   //Landing function called on LandedDelegate.Broadcast()
 	UFUNCTION(BlueprintNativeEvent)
