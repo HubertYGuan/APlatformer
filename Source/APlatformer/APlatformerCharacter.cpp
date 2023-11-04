@@ -25,6 +25,17 @@ void AAPlatformerCharacter::EnableMoveInput(const FHitResult& Hit)
   LandedDelegate.RemoveDynamic(this, &AAPlatformerCharacter::EnableMoveInput);
 }
 
+void AAPlatformerCharacter::BufferedJump(const FHitResult &Hit)
+{
+  LandedDelegate.RemoveDynamic(this, &AAPlatformerCharacter::BufferedJump);
+  GetWorld()->GetTimerManager().SetTimerForNextTick(this, &AAPlatformerCharacter::JumpE);
+}
+
+void AAPlatformerCharacter::SetIsMantlingFalse()
+{
+  bIsMantling = false;
+}
+
 void AAPlatformerCharacter::ResetClimbCooldown()
 {
   UKismetSystemLibrary::PrintString(this, "resetting climbing timer");
@@ -254,8 +265,12 @@ bool AAPlatformerCharacter::LedgeDetect()
   }
   if (ForwardWallDetect())
   {
-    LedgePos = EndVector;
-    return true;
+    FHitResult HitResult2;
+    if (UKismetSystemLibrary::LineTraceSingle(this, EndVector, EndVector - FVector(0.f,0.f,300.f), ETraceTypeQuery::TraceTypeQuery1, false, EmptyActorArray, EDrawDebugTrace::ForOneFrame, HitResult2, true))
+    {
+      LedgePos = HitResult2.ImpactPoint;
+      return true;
+    }
   }
   //this means you are no longer facing the wall properly
   StopClimbing();
@@ -282,6 +297,7 @@ void AAPlatformerCharacter::LedgeMantle()
   //the point of no return (can't cancel mantling after reaching this height)
   if (GetActorLocation().Z >= LedgePos.Z + 20.f)
   {
+    UKismetSystemLibrary::PrintString(this, "mantling");
     //unbind self from tick delegate
     TickDelegate.RemoveDynamic(this, &AAPlatformerCharacter::LedgeMantle);
     TickDelegate.RemoveDynamic(this, &AAPlatformerCharacter::LedgeHang);
@@ -298,13 +314,20 @@ void AAPlatformerCharacter::LedgeMantle()
     //LatentInfo.ExecutionFunction = "MoveCapsule";
     //LatentInfo.Linkage = 0;
     //LatentInfo.UUID = 1;
-    MantleTarget = LedgePos + (LastClimbNormal*-30.f) + FVector(0.f, 0.f, 69.f);
+    MantleTarget = LedgePos + (LastClimbNormal*-10.f) + FVector(0.f, 0.f, 69.f);
+    
+    MantleStart = GetActorLocation();
     //previously: UKismetSystemLibrary::MoveComponentTo(GetCapsuleComponent(), MantleTarget, FRotator::ZeroRotator, false, false, 0.5, false, EMoveComponentAction::Type::Move, LatentInfo);
     
     //play blueprint defined mantle timeline since c++ timelines are bad
     MantleTimelinePlay();
 
     GetWorld()->GetTimerManager().SetTimer(UnusedHandle, this, &AAPlatformerCharacter::SetClimbCooldownFalse, 0.8, false);
+
+    //Is mantling boolean stuff
+    bIsMantling = true;
+    GetWorld()->GetTimerManager().SetTimer(SetMantlingFalseHandle, this, &AAPlatformerCharacter::SetIsMantlingFalse, 0.5, false);
+
     //superglide true in the last 0.1s of mantle if sliding gear
     if (!bHasSlidingGear || !bIsSprinting) {return;}
     GetWorld()->GetTimerManager().SetTimer(SuperGlideWindowStartHandle, this, &AAPlatformerCharacter::SetCanSuperGlideTrue, 0.4, false);
@@ -313,7 +336,7 @@ void AAPlatformerCharacter::LedgeMantle()
 
 void AAPlatformerCharacter::UpdatePosition(float Value)
 {
-  FVector NewLocation = FMath::Lerp(GetActorLocation(), MantleTarget, Value);
+  FVector NewLocation = FMath::Lerp(MantleStart, MantleTarget, Value);
   SetActorLocation(NewLocation);
 }
 
@@ -372,6 +395,64 @@ void AAPlatformerCharacter::SetIgnoreForward(bool ShouldDisable)
 
 void AAPlatformerCharacter::ResetSlideCooldown()
 {
+}
+
+void AAPlatformerCharacter::GravShift(EGravShiftDirection Direction)
+{
+  
+}
+
+void AAPlatformerCharacter::DoubleJump()
+{
+  //instantly apply 1/3 jump velocity (cancel downward velocity)
+  GetCharacterMovement()->Velocity.Z = FMath::Max<FVector::FReal>(GetCharacterMovement()->Velocity.Z, JumpVelocity / 2);
+  bIsDoubleJumpHeld = true;
+  //start the looping timer to apply double jump force, up to full extra jump velocity
+  GetWorld()->GetTimerManager().SetTimer(DoubleJumpHandle, this, &AAPlatformerCharacter::ApplyDoubleJumpForce, 0.02, true);
+}
+
+void AAPlatformerCharacter::EndDoubleJump()
+{
+  bIsDoubleJumpHeld = false;
+}
+
+void AAPlatformerCharacter::ApplyDoubleJumpForce()
+{
+  if (!bIsDoubleJumpHeld)
+  {
+    GetWorld()->GetTimerManager().ClearTimer(DoubleJumpHandle);
+  }
+  if (DoubleJumpForceCounter > 0 && DoubleJumpForceCounter != 10)
+  {
+    GetCharacterMovement()->AddImpulse(FVector(0.f, 0.f, JumpVelocity * 0.075), true);
+    DoubleJumpForceCounter++;
+  }
+  else if (DoubleJumpForceCounter == 0)
+  {
+    if (GetCharacterMovement()->Velocity.Z < 0.f)
+    {
+      GetCharacterMovement()->Velocity.Z = 0.f;
+    }
+    GetCharacterMovement()->AddImpulse(FVector(0.f, 0.f, JumpVelocity * 0.075), true);
+    DoubleJumpForceCounter++;
+  }
+  else
+  {
+    DoubleJumpForceCounter = 0;
+    GetWorld()->GetTimerManager().ClearTimer(DoubleJumpHandle);
+  }
+}
+
+void AAPlatformerCharacter::DoubleJumpBootsPickup()
+{
+  DoubleJumpCount = 1;
+  bHasDoubleJumpBoots = true;
+  PCRef->CreateDoubleJump();
+}
+
+void AAPlatformerCharacter::DoubleJumpOrbOverlap()
+{
+  DoubleJumpCount++;
 }
 
 AAPlatformerCharacter::AAPlatformerCharacter()
@@ -438,6 +519,7 @@ void AAPlatformerCharacter::BeginPlay()
 
 void AAPlatformerCharacter::Tick(float DeltaSeconds)
 {
+  DeltaTime = DeltaSeconds;
   TickDelegate.Broadcast();
 }
 
@@ -450,9 +532,8 @@ void AAPlatformerCharacter::SetupPlayerInputComponent(class UInputComponent* Pla
 	{
 		//Jumping
 		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Started, this, &AAPlatformerCharacter::JumpE);
-		EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Ongoing, this, &ACharacter::StopJumping);
-    //WallJump
-    EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Started, this, &AAPlatformerCharacter::WallJump);
+    //end double jump
+    EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Completed, this, &AAPlatformerCharacter::EndDoubleJump);
     //Crouching and sliding
 		EnhancedInputComponent->BindAction(CrouchAction, ETriggerEvent::Started, this, &AAPlatformerCharacter::CrouchE);
 		EnhancedInputComponent->BindAction(CrouchAction, ETriggerEvent::Completed, this, &AAPlatformerCharacter::UnCrouchE);
@@ -527,6 +608,38 @@ void AAPlatformerCharacter::JumpE()
     UKismetSystemLibrary::PrintString(this, "Superglide successful");
     SuperGlide();
   }
+  if (bCoyoteTime)
+  {
+    bCoyoteTime = false;
+    GetCharacterMovement()->Velocity.Z = FMath::Max<FVector::FReal>(GetCharacterMovement()->Velocity.Z, GetCharacterMovement()->JumpZVelocity);
+		GetCharacterMovement()->SetMovementMode(MOVE_Falling);
+    //copied from checkjumpinput
+    JumpCurrentCount++;
+		JumpForceTimeRemaining = GetJumpMaxHoldTime();
+		OnJumped();
+  }
+  //double jumping
+  else if (GetCharacterMovement()->IsFalling())
+  {
+    //to check if close to the ground
+    TArray<AActor*> EmptyActorArray;
+    FHitResult HitResult;
+    if (UKismetSystemLibrary::LineTraceSingle(this, GetActorLocation(), GetActorLocation() + GetActorUpVector() * -126.f, ETraceTypeQuery::TraceTypeQuery1, false, EmptyActorArray, EDrawDebugTrace::ForOneFrame, HitResult, true))
+    {
+      if (!LandedDelegate.Contains(this, FName("BufferedJump")))
+      {
+        LandedDelegate.AddDynamic(this, &AAPlatformerCharacter::BufferedJump);
+      }
+      return;
+    }
+    if (DoubleJumpCount > 0 && !bCanWallJump)
+    {
+      DoubleJumpCount--;
+      DoubleJump();
+    }
+  }
+  //wall jumping (if reqs met)
+  WallJump();
 }
 
 void AAPlatformerCharacter::CrouchE()
@@ -669,12 +782,10 @@ void AAPlatformerCharacter::ApplySlideForce()
   {
     Multiplier *= 0.3;
   }
-  UKismetSystemLibrary::PrintString(this, "Mult:"+FString::SanitizeFloat(Multiplier)+"\nAngle:"+FString::SanitizeFloat(SlideForceAngle));
   FrameLaunchForce *= Multiplier;
   SlideForce.FrameLaunchForce = FrameLaunchForce;
   }
   GetCharacterMovement()->AddForce(SlideForce.FrameLaunchForce);
-  UKismetSystemLibrary::PrintString(this, "Boosting with force "+ SlideForce.FrameLaunchForce.ToString() + "\nmagnitude: " + FString::SanitizeFloat(SlideForce.FrameLaunchForce.Size()));
 
   if (SlideForceTimerCount == 9)
   {
@@ -793,6 +904,9 @@ void AAPlatformerCharacter::WallJump()
   {
     UKismetSystemLibrary::PrintString(this, "wall jump successful");
     LaunchCharacter(LaunchVector, false, false);
+    //double jump cooldown
+    bDoubleJumpCooldown = true;
+    GetWorld()->GetTimerManager().SetTimer(DoubleJumpCooldownHandle, this, &AAPlatformerCharacter::SetDoubleJumpCooldownFalse, 0.1, false);
   }
   bCanWallJump = false;
   bHadWallJumpOpportunity = true;
@@ -953,6 +1067,8 @@ void AAPlatformerCharacter::UnbindWallJumpDetect()
 void AAPlatformerCharacter::SuperGlide()
 {
   MantleTimelineStop();
+  SetIsMantlingFalse();
+  GetWorld()->GetTimerManager().ClearTimer(SetMantlingFalseHandle);
   //rotated pi/2 ccw in xy direction from lastclimbnormal
   //also superglide z velo is fixed to jumpvelo boost
   //this isn't even the rightward vector but I'm not making this a physics z mech problem
@@ -986,8 +1102,14 @@ void AAPlatformerCharacter::Landing_Implementation(const FHitResult& Hit)
   StopClimbing();
   ResetClimbCooldown();
   GetWorld()->GetTimerManager().ClearTimer(ClimbCooldownTimer);
+  //wall jumping
   bCanWallJump = false;
   UnbindWallJumpDetect();
+  //Double Jumping
+  if (bHasDoubleJumpBoots)
+  {
+    DoubleJumpCount = 1;
+  }
 }
 
 void AAPlatformerCharacter::JumpPadBoost_Implementation(double VelocityZ)
@@ -1000,6 +1122,11 @@ void AAPlatformerCharacter::OnJumped_Implementation()
 {
   UKismetSystemLibrary::PrintString(this, "timer invalidated");
   UKismetSystemLibrary::K2_ClearAndInvalidateTimerHandle(this, JumpFatigueTimerHandle);
+
+  //double jump cooldown
+  bDoubleJumpCooldown = true;
+  GetWorld()->GetTimerManager().SetTimer(DoubleJumpCooldownHandle, this, &AAPlatformerCharacter::SetDoubleJumpCooldownFalse, 0.1, false);
+
   JumpDelegate.Broadcast();
 }
 
@@ -1009,6 +1136,10 @@ void AAPlatformerCharacter::OnWalkingOffLedge_Implementation(const FVector &Prev
   {
     EndSlideInAir();
   }
+  //coyote time start
+  bCoyoteTime = true;
+  //really long rn to test
+  GetWorld()->GetTimerManager().SetTimer(CoyoteTimeHandle, this, &AAPlatformerCharacter::SetCoyoteTimeFalse, 0.1, false);
 }
 
 void AAPlatformerCharacter::NotifyHit(UPrimitiveComponent *MyComp, AActor *Other, UPrimitiveComponent *OtherComp, bool bSelfMoved, FVector HitLocation, FVector HitNormal, FVector NormalImpulse, const FHitResult &Hit)
@@ -1078,19 +1209,19 @@ double AAPlatformerCharacter::JumpVelocityCalc(int & Count, double & Timer)
   switch (Count)
   {
   case 1:
-    Timer = 0.3;
+    Timer = 0.1;
     return JumpVelocity * 0.85;
   case 2:
-    Timer = 0.45;
+    Timer = 0.15;
     return JumpVelocity * 0.75;
   case 3:
-  Timer = 0.55;
+  Timer = 0.3;
     return JumpVelocity * 0.6;
   case 4:
-  Timer = 0.6;
+  Timer = 0.4;
     return JumpVelocity * 0.5;
   case 5:
-    Timer = 0.65;
+    Timer = 0.5;
     return JumpVelocity * 0.4;
   default:
     return JumpVelocity;

@@ -20,6 +20,14 @@ class UMainGI;
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FTickDelegateSignature);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FJumpDelegateSignature);
 
+UENUM(BlueprintType)
+enum class EGravShiftDirection : uint8
+{
+  DOWN = 0  UMETA(DisplayName = "DOWN"),
+  LEFT = 1  UMETA(DisplayName = "LEFT"),
+  UP = 2    UMETA(DisplayName = "UP"),
+  RIGHT = 3 UMETA(DisplayName = "RIGHT")
+};
 UCLASS(config=Game)
 class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
 {
@@ -40,6 +48,9 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
   UPROPERTY(VisibleAnywhere, BlueprintReadOnly, meta = (AllowPrivateAccess = "true"))
   UMainGI *GIRef;
 
+  UPROPERTY()
+  float DeltaTime;
+
   //enable move input
   UFUNCTION()
   void EnableMoveInput(const FHitResult& Hit);
@@ -51,6 +62,10 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
   //delegate that is broadcasted every jump
   UPROPERTY(VisibleAnywhere, BlueprintReadOnly, meta = (AllowPrivateAccess = "true"))
   FJumpDelegateSignature JumpDelegate;
+
+  //bound to landed and auto activates JumpE after a one tick delay since landing is still midair
+  UFUNCTION()
+  void BufferedJump(const FHitResult& Hit);
   
   //The max walk speed of the character (not sprinting)
   UPROPERTY(VisibleAnywhere, BlueprintReadOnly, meta = (AllowPrivateAccess = "true"))
@@ -99,6 +114,14 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
 
   UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = Climbing, meta = (AllowPrivateAccess = "true"))
   bool bClimbCooldown = false;
+
+  UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = Climbing, meta = (AllowPrivateAccess = "true"))
+  bool bIsMantling = false;
+
+  UFUNCTION()
+  void SetIsMantlingFalse();
+
+  FTimerHandle SetMantlingFalseHandle;
 
   //if near ledge (can hang on ledge or go on top)
   UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = Climbing, meta = (AllowPrivateAccess = "true"))
@@ -248,6 +271,68 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
   UFUNCTION(BlueprintCallable, Category = Sliding)
   void ResetSlideCooldown();
 
+  //if the player has unlocked gravity manipulator (by default it allows faster falling) (but level triggers
+  //can upgrade it temporarily to allow sideways gravity and reduced gravity)
+  UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = GravMan, meta = (AllowPrivateAccess = "true"))
+  bool bHasGravMan = false;
+
+  //if player can shift gravity 90 degrees
+  UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = GravMan, meta = (AllowPrivateAccess = "true"))
+  bool bCanGravShift = false;
+
+  //the rightward vector for grav shift
+  UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = GravMan, meta = (AllowPrivateAccess = "true"))
+  FVector GravShiftRightVector;
+
+  //if player can reduce gravity
+  UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = GravMan, meta = (AllowPrivateAccess = "true"))
+  bool bCanReduceGrav = false;
+
+  //grav shift currently wip
+  UFUNCTION(BlueprintCallable, Category = GravMan)
+  void GravShift(EGravShiftDirection Direction);
+
+  //# of times can double jump (increase by one every time contact dj orb)
+  UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = DoubleJump, meta = (AllowPrivateAccess = "true"))
+  int DoubleJumpCount;
+
+  UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = DoubleJump, meta = (AllowPrivateAccess = "true"))
+  FTimerHandle DoubleJumpHandle;
+
+  UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = DoubleJump, meta = (AllowPrivateAccess = "true"))
+  bool bIsDoubleJumpHeld = false;
+
+  //makes scroll jumping actually possible since you won't immediately double jump after doing it
+  UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = DoubleJump, meta = (AllowPrivateAccess = "true"))
+  bool bDoubleJumpCooldown = false;
+
+  FTimerHandle DoubleJumpCooldownHandle;
+
+  void SetDoubleJumpCooldownFalse() {bDoubleJumpCooldown = false;};
+  //it triggers double jump, unlike regular jump, it is dependent on how long you hold
+  UFUNCTION(BlueprintCallable, Category = DoubleJump)
+  void DoubleJump();
+
+  UFUNCTION(BlueprintCallable, Category = DoubleJump)
+  void EndDoubleJump();
+
+  //ticks 10 times or 1/5 of second in total
+  UFUNCTION(BlueprintCallable, Category = DoubleJump)
+  void ApplyDoubleJumpForce();
+
+  int DoubleJumpForceCounter = 0;
+
+  UPROPERTY(VisibleAnywhere, BlueprintReadonly, Category = DoubleJump, meta = (AllowPrivateAccess = "true"))
+  bool bHasDoubleJumpBoots = false;
+
+  public:
+  UFUNCTION(BlueprintCallable, Category = DoubleJump)
+  void DoubleJumpBootsPickup();
+
+  UFUNCTION(BlueprintCallable, Category = DoubleJump)
+  void DoubleJumpOrbOverlap();
+
+  protected:
   UPROPERTY()
   FTimerHandle UnusedHandle;
 
@@ -270,14 +355,19 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
   //esc to pull up the menu/paused ui
   UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=Input, meta=(AllowPrivateAccess = "true"))
 	class UInputAction* PausedMenuAction;
+  //to increase gravity when held
+  UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=Input, meta=(AllowPrivateAccess = "true"))
+	class UInputAction* GravIncreaseAction;
+  //to shift gravity right/left (positive is right)
+  UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=Input, meta=(AllowPrivateAccess = "true"))
+	class UInputAction* GravShiftAction;
+  //grav float when held
+  UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=Input, meta=(AllowPrivateAccess = "true"))
+	class UInputAction* GravReduceAction;
 
 	/** Move Input Action */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=Input, meta=(AllowPrivateAccess = "true"))
 	class UInputAction* MoveAction;
-
-	//set in blueprint
-  UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Climbing, meta=(AllowPrivateAccess = "true"))
-  UCurveFloat *MantleCurve;
 
 public:
 	AAPlatformerCharacter();
@@ -465,6 +555,14 @@ protected:
   virtual void OnJumped_Implementation() override;
 
   virtual void OnWalkingOffLedge_Implementation(const FVector& PreviousFloorImpactNormal, const FVector& PreviousFloorContactNormal, const FVector& PreviousLocation, float TimeDelta) override;
+
+  //coyote time
+  UPROPERTY()
+  FTimerHandle CoyoteTimeHandle;
+  UPROPERTY()
+  bool bCoyoteTime = false;
+  UFUNCTION()
+  void SetCoyoteTimeFalse() {bCoyoteTime = false;};
 
   //override of Notify Hit (still calls receive hit in BP)
   virtual void NotifyHit(class UPrimitiveComponent* MyComp, AActor* Other, class UPrimitiveComponent* OtherComp, bool bSelfMoved, FVector HitLocation, FVector HitNormal, FVector NormalImpulse, const FHitResult& Hit) override;

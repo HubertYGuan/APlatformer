@@ -35,6 +35,10 @@ class APLATFORMER_API APCThing : public APlayerController
   UFUNCTION(BlueprintImplementableEvent, Category = Ability)
   void CreateSliding();
 
+  //Creates a widget to show double jumping is unlocked
+  UFUNCTION(BlueprintImplementableEvent, Category = Ability)
+  void CreateDoubleJump();
+
   //Creates/removes a widget for a tip: crouch
   UFUNCTION(BlueprintImplementableEvent, Category = Tips)
   void CreateTip(FName TipType);
