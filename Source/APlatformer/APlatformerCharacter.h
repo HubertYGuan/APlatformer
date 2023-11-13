@@ -332,6 +332,34 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
   UFUNCTION(BlueprintCallable, Category = DoubleJump)
   void DoubleJumpOrbOverlap();
 
+  //timer called every onjumped (currently used just for lurch)
+  FTimerHandle OnJumpedHandle;
+
+  //lurching
+  //struct for default lurch settings (borrowed not stolen from titanfall)
+  struct LurchStruct
+  {
+    //time when lurching is possible
+    float PeriodMax = 0.4;
+    //time when lurch magnitude curve isn't in effect (linear down to zero after this)
+    float PeriodMin = 0.2;
+
+    //determines how fast velocity drops off beyond maxangle (should set so player will still be able to lurch even if 180 tho)
+    //DegreeChange is based on input MovementVector not new velocity vector
+    //DropoffMultiplier = (1 - (DegreeChange - MaxAngle) * Dropoff)
+    float Dropoff = 0.003;
+
+    //max angle between velocity and lurch direction without speed loss
+    float MaxAngle = 25.f;
+    //How much a lurch input affects velocity direction (GetVelocity().GetSafeNormal()+MovementVector.GetSafeNormal()*Strength).GetSafeNormal() for new direction
+    float Strength = 0.5;
+  };
+
+  LurchStruct Lurch;
+
+  UPROPERTY()
+  bool bIsMoveInputReleased = true;
+
   protected:
   UPROPERTY()
   FTimerHandle UnusedHandle;
@@ -349,9 +377,6 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
   /** Sprint Input Action */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=Input, meta=(AllowPrivateAccess = "true"))
 	class UInputAction* SprintAction;
-  /** Lurch Input Action */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=Input, meta=(AllowPrivateAccess = "true"))
-	class UInputAction* LurchAction;
   //esc to pull up the menu/paused ui
   UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=Input, meta=(AllowPrivateAccess = "true"))
 	class UInputAction* PausedMenuAction;

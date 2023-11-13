@@ -206,12 +206,14 @@ void AAPlatformerCharacter::StopClimbing()
 
 void AAPlatformerCharacter::StopClimbingActionMethod()
 {
-  UKismetSystemLibrary::PrintString(this, FString::SanitizeFloat(LastMoveInput.Y));
+  UKismetSystemLibrary::PrintString(this, "calling stopclimbingactionmethod");
   //stopclimbing will only be called on forward input end
   if (LastMoveInput.Y > 0)
   {
     StopClimbing();
   }
+  //also sets move released false
+  bIsMoveInputReleased = true;
 }
 
 bool AAPlatformerCharacter::ForwardWallDetect()
@@ -409,6 +411,7 @@ void AAPlatformerCharacter::DoubleJump()
   bIsDoubleJumpHeld = true;
   //start the looping timer to apply double jump force, up to full extra jump velocity
   GetWorld()->GetTimerManager().SetTimer(DoubleJumpHandle, this, &AAPlatformerCharacter::ApplyDoubleJumpForce, 0.02, true);
+  GetWorld()->GetTimerManager().SetTimer(OnJumpedHandle, this, &AAPlatformerCharacter::ResetClimbCooldown, 0.4, false);
 }
 
 void AAPlatformerCharacter::EndDoubleJump()
@@ -582,7 +585,53 @@ void AAPlatformerCharacter::Move(const FInputActionValue& Value)
     }
 
 		AddMovementInput(GetActorRightVector(), MovementVector.X * StrafeMultiplier);
+    //lurching meant for digital inputs as expected (doesn't take forward or strafe multiplier into account)
+    //first check if new direction pressed (not released)
+    if (MovementVector.Size() >= LastMoveInput.Size() && (MovementVector != LastMoveInput || bIsMoveInputReleased))
+    {
+      //get the time since last jump and lurch if is less than periodmax
+      int TimeSinceJump = 0.4 - GetWorld()->GetTimerManager().GetTimerRemaining(OnJumpedHandle);
+      if (TimeSinceJump >= 0.4)
+      {
+        bIsMoveInputReleased = false;
+        LastMoveInput = MovementVector;
+        return;
+      }
+      FVector2D VelocityXY = FVector2D(GetVelocity().X, GetVelocity().Y);
+      //combined with dropoff multiplier to calculate finallurchvector magnitude
+      int LurchPeriodMultiplier;
+      if (TimeSinceJump <= Lurch.PeriodMin)
+      {
+        LurchPeriodMultiplier = 1;
+      }
+      else
+      {
+        LurchPeriodMultiplier = (-1 / (Lurch.PeriodMax - Lurch.PeriodMin))*(TimeSinceJump - Lurch.PeriodMin) + 1;
+      }
+      //angle check
+      FVector2D ForwardVector2D = FVector2D(GetActorForwardVector().X, GetActorForwardVector().Y);
+      FVector2D RightVector2D = FVector2D(GetActorRightVector().X, GetActorRightVector().Y);
+      //also normalized
+      FVector2D MovementVectorOriented = (ForwardVector2D * MovementVector.Y) + (RightVector2D * MovementVector.X);
+      float AngleBetween = UKismetMathLibrary::DegAcos(VelocityXY.GetSafeNormal().Dot(MovementVectorOriented.GetSafeNormal()));
+      float DropoffMultiplier = 1;
+      if (AngleBetween > Lurch.MaxAngle)
+      {
+        UKismetSystemLibrary::PrintString(this, "angle between calculated" + FString::SanitizeFloat(AngleBetween));
+        DropoffMultiplier = (1 - ((AngleBetween - Lurch.MaxAngle) * Lurch.Dropoff));
+      }
+      float NewMagnitude = (DropoffMultiplier * LurchPeriodMultiplier) * VelocityXY.Size();
+      FVector2D NewDirection = ((VelocityXY.GetSafeNormal()) + (MovementVectorOriented.GetSafeNormal() * (Lurch.Strength))).GetSafeNormal();
+      FVector FinalLurchVector = FVector(NewDirection.X, NewDirection.Y, 0.f) * NewMagnitude;
+      UKismetSystemLibrary::PrintString(this, NewDirection.ToString());
+      UKismetSystemLibrary::PrintString(this, FinalLurchVector.ToString());
+      UKismetSystemLibrary::PrintString(this, "maybe normalization off" + ((VelocityXY.GetSafeNormal()) + (MovementVector.GetSafeNormal() * (Lurch.Strength))).ToString());
+      UKismetSystemLibrary::PrintString(this, "dropoff multiplier " + FString::SanitizeFloat(DropoffMultiplier));
+      UKismetSystemLibrary::PrintString(this, "period multiplier " + FString::SanitizeFloat(LurchPeriodMultiplier));
+      LaunchCharacter(FinalLurchVector, true, false);
+    }
 	}
+  bIsMoveInputReleased = false;
   LastMoveInput = MovementVector;
 }
 
@@ -1110,6 +1159,8 @@ void AAPlatformerCharacter::Landing_Implementation(const FHitResult& Hit)
   {
     DoubleJumpCount = 1;
   }
+  //clear onjumped timer handle
+  GetWorld()->GetTimerManager().ClearTimer(OnJumpedHandle);
 }
 
 void AAPlatformerCharacter::JumpPadBoost_Implementation(double VelocityZ)
@@ -1126,6 +1177,8 @@ void AAPlatformerCharacter::OnJumped_Implementation()
   //double jump cooldown
   bDoubleJumpCooldown = true;
   GetWorld()->GetTimerManager().SetTimer(DoubleJumpCooldownHandle, this, &AAPlatformerCharacter::SetDoubleJumpCooldownFalse, 0.1, false);
+  //right now just for lurching
+  GetWorld()->GetTimerManager().SetTimer(OnJumpedHandle, this, &AAPlatformerCharacter::ResetClimbCooldown, 0.4, false);
 
   JumpDelegate.Broadcast();
 }
