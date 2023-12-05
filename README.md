@@ -4,7 +4,7 @@
 A platformer/FPS made in Unreal Engine 5.2. 
 > "Media" is an orphan branch with media for the repo
 
-![Level 2 Preview](https://raw.githubusercontent.com/dorioto/APlatformer/Media/Media/HighresScreenshot_2023.12.04-12.22.04.png?token=GHSAT0AAAAAACIUE25NHAOQCG7MLZLB6O5AZLOXORA)
+![Level 2 Preview](https://github.com/dorioto/APlatformer/raw/Media/Media/HighresScreenshot_2023.12.04-12.22.04.png)
 ## Features
 > Mostly implemented in C++ without plugins
 
