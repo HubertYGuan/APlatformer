@@ -20,7 +20,40 @@
 //////////////////////////////////////////////////////////////////////////
 // AAPlatformerCharacter
 
-void AAPlatformerCharacter::EnableMoveInput(const FHitResult& Hit)
+
+//called on landing
+void AAPlatformerCharacter::WallRunReset()
+{
+  WallRun.VelocityLastTick = FVector();
+  WallRun.bIsRunning = false;
+  WallRun.Height = -69420.f;
+  WallRun.Wall = nullptr;
+  WallRun.InVector = FVector();
+  WallRun.OutVector = FVector();
+  WallRun.LeanInRotator = FRotator();
+  WallRun.SameWallCooldown = false;
+  WallRun.bDoubleJumped = false;
+  WallRunHandleReset();
+  UKismetSystemLibrary::PrintString(this, "wall run reset successful");
+  UKismetSystemLibrary::PrintString(this, FString::SanitizeFloat(WallRun.Height));
+}
+
+void AAPlatformerCharacter::WallRunSetIsRunning(bool Value)
+{
+  WallRun.bIsRunning = Value;
+}
+
+void AAPlatformerCharacter::WallRunSetLeaning(bool Value)
+{
+  WallRun.bLeaning = Value;
+}
+
+void AAPlatformerCharacter::WallRunSetSameWallCooldown(bool Value)
+{
+  WallRun.SameWallCooldown = Value;
+}
+
+void AAPlatformerCharacter::EnableMoveInput(const FHitResult &Hit)
 {
   PCRef->SetIgnoreMoveInput(false);
   LandedDelegate.RemoveDynamic(this, &AAPlatformerCharacter::EnableMoveInput);
@@ -69,7 +102,7 @@ void AAPlatformerCharacter::Climb(const FInputActionValue &InputActionValue)
   {
     return;
   }
-  if (WallRun.bIsRunning)
+  if (WallRun.bIsRunning || WallRun.bLeaning)
   {
     return;
   }
@@ -239,16 +272,18 @@ bool AAPlatformerCharacter::ForwardWallDetect()
 
   if (bHit)
   {
-    if (HitResults.Num() != 1)
-    {
-      return false;
-    }
     for (auto& Hit : HitResults)
     {
       AActor* HitActor = Hit.GetActor();
       if (HitActor == nullptr)
       {
+        UKismetSystemLibrary::PrintString(this, "nullptr false");
         return false;
+      }
+      //check if it's a trigger
+      if (Cast<UShapeComponent>(Hit.GetComponent()))
+      {
+        continue;
       }
       if (UKismetMathLibrary::Abs(Hit.Normal.Z)>0.4)
       {
@@ -471,7 +506,17 @@ void AAPlatformerCharacter::DoubleJumpOrbOverlap()
   DoubleJumpCount++;
 }
 
-void AAPlatformerCharacter::WallRunCompute(const FInputActionValue& Value)
+void AAPlatformerCharacter::WallRunHandleReset()
+{
+  GetWorld()->GetTimerManager().ClearTimer(WallRun.Handle);
+}
+
+void AAPlatformerCharacter::WallRunHandleStart()
+{
+  GetWorld()->GetTimerManager().SetTimer(WallRun.Handle, this, &AAPlatformerCharacter::ResetSlideCooldown, 1.75, false);
+}
+
+void AAPlatformerCharacter::WallRunCompute(const FInputActionValue &Value)
 {
   if (!WallRun.bCanRun)
   {
@@ -481,10 +526,25 @@ void AAPlatformerCharacter::WallRunCompute(const FInputActionValue& Value)
   {
     return;
   }
-  //check the angle of invector compared to normal (will climb instead of wall running if too low)
-  
+  if (!bIsSprinting)
+  {
+    return;
+  }
+  GetWorld()->GetTimerManager().ClearTimer(LetGoHandle);
+  GetWorld()->GetTimerManager().ClearTimer(LetGoHandle2);
 
   bool bOnWall = WallRunDetect(false, true);
+
+  //check the angle of forwardvector compared to normal (will climb and stop wall running if too high)
+  if (UKismetMathLibrary::Abs((GetActorForwardVector().Dot(WallRun.Normal)))>0.9)
+  {
+    UKismetSystemLibrary::PrintString(this, "wall normal angle too high c++");
+    if (WallRun.bIsRunning || WallRun.bLeaning)
+    {
+    WallRunCancel();
+    }
+    return;
+  }
 
   if (!WallRun.bIsRunning)
   {
@@ -492,6 +552,7 @@ void AAPlatformerCharacter::WallRunCompute(const FInputActionValue& Value)
     {
       if (WallRun.bLeaning)
       {
+        UKismetSystemLibrary::PrintString(this, "leaning cancel c++");
         WallRunDetect(true);
         //cancel lean in
         WallRunStartTimelineStop();
@@ -499,25 +560,31 @@ void AAPlatformerCharacter::WallRunCompute(const FInputActionValue& Value)
       //wallbump
       if (GetCharacterMovement()->bWantsToCrouch)
       {
+        UKismetSystemLibrary::PrintString(this, "wallbump c++");
         WallRunDetect(true);
         WallBump();
       }
     }
     else if (WallRunDetect() && !WallRun.bLeaning)
     {
+      UKismetSystemLibrary::PrintString(this, "starting wall run timeline c__");
       //start lean in
       WallRunStartTimelineBegin();
+      //do some other stuff related to double jumping
+      WallRunStart();
     }
   }
   else
+  //is running
   {
     //case that already running but no longer on wall
     if (!bOnWall)
     {
-      WallRunDetect(true);
+      UKismetSystemLibrary::PrintString(this, "cancel no longer on wall c++");
       WallRunCancel();
       return;
     }
+    UKismetSystemLibrary::PrintString(this, "slow or boost c++");
     FVector VelocityXY = GetVelocity();
     VelocityXY.Z = 0.f;
     //case that you can keep running, but need to slow down
@@ -535,115 +602,177 @@ void AAPlatformerCharacter::WallRunCompute(const FInputActionValue& Value)
 
 bool AAPlatformerCharacter::WallRunDetect(bool ForWallRunStop, bool OnlyCollisionCheck)
 {
-  if (WallRun.bIsRunning && !ForWallRunStop)
-  {
-    return false;
-  }
+  UKismetSystemLibrary::PrintString(this, "wallrundetect");
   //I h8 dry programming
   TArray<FHitResult> HitResults;
   FVector StartLocation = GetActorLocation();
 
-  FCollisionShape MyCapsule = FCollisionShape::MakeCapsule(55.5, 66.f);
+  FCollisionShape MyCapsule = FCollisionShape::MakeCapsule(45.5, 66.f);
 
   bool bHit = GetWorld()->SweepMultiByChannel(HitResults, StartLocation, StartLocation+FVector(0, 0, -25.f), FQuat::Identity, ECC_Visibility, MyCapsule);
 
   if (bHit)
   {
-    if (HitResults.Num() != 1)
-    {
-      if (WallRun.bGetVelocity) {WallRun.VelocityLastTick = GetVelocity();}
-      return false;
-    }
-    //yes a for loop for an array with one member
     for (auto& Hit : HitResults)
     {
       AActor* HitActor = Hit.GetActor();
+      UKismetSystemLibrary::PrintString(this, HitActor->GetName());
+      if (WallRun.Wall != nullptr)
+      {
+      UKismetSystemLibrary::PrintString(this, "name of samewall: " + WallRun.Wall->GetName());
+      }
       if (HitActor == nullptr)
       {
+        UKismetSystemLibrary::PrintString(this, "nullptr false");
         return false;
+      }
+      //check if it's a trigger
+      if (Cast<UShapeComponent>(Hit.GetComponent()))
+      {
+        continue;
       }
       if (HitActor->ActorHasTag(FName("NotClimbable")))
       {
+        UKismetSystemLibrary::PrintString(this, "not climbable false");
         return false;
       }
+
       //check if the wall is too slanted to wall run
-      if (UKismetMathLibrary::Abs(Hit.ImpactNormal.Z) > 0.2f)
+      if (UKismetMathLibrary::Abs(Hit.ImpactNormal.Z) > 0.3f && !OnlyCollisionCheck)
       {
+        UKismetSystemLibrary::PrintString(this, "normal z value false");
         return false;
       }
-      if (OnlyCollisionCheck && HitActor == WallRun.Wall)
+
+      if (OnlyCollisionCheck)
       {
+        UKismetSystemLibrary::PrintString(this, "wallrundetect collision only true");
+        WallRun.Normal = Hit.ImpactNormal;
         return true;
       }
       //height check, can only wall jump on same wall if lower (can freely if different walls)
-      if (!WallRun.bIsRunning && GetActorLocation().Z >= WallRun.Height - 100.f && WallRun.Height != -69420.f && HitActor == WallRun.Wall)
+      if (!WallRun.bIsRunning && ((GetActorLocation().Z >= WallRun.Height - 400.f && WallRun.Height != -69420.f) || WallRun.SameWallCooldown) && HitActor == WallRun.Wall)
       {
+        UKismetSystemLibrary::PrintString(this, "height too high or not reset and same wall false");
         return false;
       }
       if (ForWallRunStop)
       {
         WallRun.Normal = Hit.ImpactNormal;
         WallRun.Height = GetActorLocation().Z;
+        WallRun.Wall = HitActor;
       }
       else
       {
         WallRun.Normal = Hit.ImpactNormal;
-        WallRun.Wall = HitActor;
         WallRun.InVector = WallRun.VelocityLastTick;
       }
+      UKismetSystemLibrary::PrintString(this, "wallrundetect true");
+      return true;
     }
-    return true;
   }
+  UKismetSystemLibrary::PrintString(this, "no hit false");
   return false;
+}
+
+void AAPlatformerCharacter::SameWallDetect()
+{
+  TArray<FHitResult> HitResults;
+  FVector StartLocation = GetActorLocation();
+
+  //you need to be pretty clear of the wall to clear the samewallcooldown
+  FCollisionShape MyCapsule = FCollisionShape::MakeCapsule(80.5, 66.f);
+
+  bool bHit = GetWorld()->SweepMultiByChannel(HitResults, StartLocation, StartLocation+FVector(0, 0, -25.f), FQuat::Identity, ECC_Visibility, MyCapsule);
+
+  if (bHit)
+  {
+    for (auto& Hit : HitResults)
+    {
+      AActor* HitActor = Hit.GetActor();
+      if (HitActor == nullptr)
+      {
+        UKismetSystemLibrary::PrintString(this, "nullptr error");
+        return;
+      }
+      //check if it's a trigger
+      if (!Cast<UShapeComponent>(Hit.GetComponent()) || HitActor == WallRun.Wall)
+      {
+        return;
+      }
+    }
+  }
+  WallRun.SameWallCooldown = false;
+  TickDelegate.RemoveDynamic(this, &AAPlatformerCharacter::SameWallDetect);
+}
+
+void AAPlatformerCharacter::BindSameWallDetect()
+{
+  if (!TickDelegate.Contains(this, FName("SameWallDetect")))
+  {
+    TickDelegate.AddDynamic(this, &AAPlatformerCharacter::SameWallDetect);
+  }
 }
 
 void AAPlatformerCharacter::WallRunStart()
 {
-  WallRun.bGetVelocity = false;
   if (WallRun.bDoubleJumped)
   {
     DoubleJumpCount++;
     WallRun.bDoubleJumped = false;
   }
-  WallRun.bIsRunning = true;
 }
 
 void AAPlatformerCharacter::WallRunCancel()
 {
+  WallRunDetect(true);
   WallRunStartTimelineStop();
   WallRun.bGetVelocity = true;
   GetWorld()->GetTimerManager().SetTimer(WallRun.CoyoteHandle, this, &AAPlatformerCharacter::ResetSlideCooldown, 0.1, false);
   WallRun.bIsRunning = false;
 }
 
+void AAPlatformerCharacter::WallRunLetGo()
+{
+  if (!WallRun.bIsRunning && !WallRun.bLeaning)
+  {
+    return;
+  }
+  GetWorld()->GetTimerManager().SetTimer(LetGoHandle, this, &AAPlatformerCharacter::WallRunCancel, 0.5, false);
+  GetWorld()->GetTimerManager().SetTimer(LetGoHandle2, this, &AAPlatformerCharacter::WallRunStartTimelineStop, 0.5, false);
+}
+
 void AAPlatformerCharacter::WallRunBoost()
 {
-  FVector LaunchVector = GetVelocity().GetSafeNormal() * 30.f;
+  //unit vector
+  FVector LaunchVector = (WallRun.ForwardVector * WallRun.ForwardVector.Dot(GetVelocity())).GetSafeNormal();
   if ((GetVelocity() + LaunchVector).Size() < 1000.f)
   {
-    LaunchCharacter(LaunchVector, false, false);
+    LaunchCharacter(LaunchVector*30.f, false, false);
   }
   else
   {
-    LaunchCharacter(GetVelocity().GetSafeNormal()*1000.f, true, false);
+    LaunchCharacter(LaunchVector*1000.f, true, true);
   }
 }
 
 void AAPlatformerCharacter::WallRunSlow()
 {
-  FVector LaunchVector = GetVelocity().GetSafeNormal() * -30.f;
+  //unit vector
+  FVector LaunchVector = (WallRun.ForwardVector * WallRun.ForwardVector.Dot(GetVelocity())).GetSafeNormal();
   if ((GetVelocity() + LaunchVector).Size() > 1000.f)
   {
-    LaunchCharacter(LaunchVector, false, false);
+    LaunchCharacter(LaunchVector*-30.f, false, false);
   }
   else
   {
-    LaunchCharacter(GetVelocity().GetSafeNormal()*1000.f, true, false);
+    LaunchCharacter(LaunchVector*1000.f, true, true);
   }
 }
 
 void AAPlatformerCharacter::WallRunJump()
 {
+  UKismetSystemLibrary::PrintString(this, "calling wallrunjump");
   //one factor to determine magnitude of outvector (additive):
   float TimeOnWall = GetWorld()->GetTimerManager().GetTimerElapsed(WallRun.Handle);
   //60 tps ticks on wall rounded up (i couldn't find the ceiling function)
@@ -659,38 +788,39 @@ void AAPlatformerCharacter::WallRunJump()
   }
   
   //reflect like the wall jump (can be modified if end boosting i.e. coyote time)
-  WallRun.OutVector = GetVelocity() + WallRun.Normal * NormalMultiplier;
-  FVector TimeOnWallAddVector = WallRun.OutVector.GetSafeNormal();
-  switch (TicksOnWall)
+  WallRun.OutVector = FVector(VelocityXY, 0.f);
+  //check for a wall kick and set outvector's magnitude appropriately
+  if (TicksOnWall <= 5)
   {
-  case -1:
-    //means the timer is uninitialized and something is definitely wrong
-    //I'm just gonna count it as regular and pretend nothing happened (yes I know default covers this)
-    break;
-  case 0:
-    //what how, anyway cancel the jump if this somehow happens
-    return;
-  case 1:
-    //firstie, max addition
-    TimeOnWallAddVector *= 200.f;
-    break;
-  case 2:
-    TimeOnWallAddVector *= 150.f;
-    break;
-  case 3:
-    TimeOnWallAddVector *= 125.f;
-    break;
-  case 4:
-    TimeOnWallAddVector *= 100.f;
-    break;
-  case 5:
-    TimeOnWallAddVector *= 75.f;
-    break;
-  default:
-    //non wall kicks don't get a speed bonus
-    break;
-  }
+    WallRun.OutVector *= 1000.f / WallRun.OutVector.Size();
+    //additional boost based on how soon you wall kick
+    FVector TimeOnWallAddVector = WallRun.OutVector.GetSafeNormal();
+    switch (TicksOnWall)
+    {
+    case 1:
+      //firstie, max addition
+      TimeOnWallAddVector *= 200.f;
+      break;
+    case 2:
+      TimeOnWallAddVector *= 150.f;
+      break;
+    case 3:
+      TimeOnWallAddVector *= 125.f;
+      break;
+    case 4:
+      TimeOnWallAddVector *= 100.f;
+      break;
+    case 5:
+      TimeOnWallAddVector *= 75.f;
+      break;
+    default:
+      //somehow less than one tick on the wall
+      break;
+    }
   WallRun.OutVector += TimeOnWallAddVector;
+  }
+  //add the boost away from the wall
+  WallRun.OutVector += WallRun.Normal * NormalMultiplier;
 
   float OutVectorMagnitude = WallRun.OutVector.Size();
 
@@ -729,7 +859,10 @@ void AAPlatformerCharacter::WallRunJump()
   {
     WallRun.OutVector = NewDirection * (OutVectorMagnitude * (-0.01 * (PlayerCameraAngle-10.f) + 1));
   }
-
+  //add z velocity
+  WallRun.OutVector += FVector(0.f, 0.f, JumpVelocity * 0.9);
+  UKismetSystemLibrary::PrintString(this, "yo there's supposed to be a vector below:");
+  UKismetSystemLibrary::PrintString(this, WallRun.OutVector.ToString());
   LaunchCharacter(WallRun.OutVector, true, false);
 }
 
@@ -743,13 +876,55 @@ void AAPlatformerCharacter::WallBump()
   LaunchCharacter(LaunchVector, true, false);
 }
 
+void AAPlatformerCharacter::CalculateMaxLeanIn()
+{
+  //create a forwardvector parallel to the wall in the direction of the player's movement
+  WallRun.ForwardVector = WallRun.Normal.Cross(FVector(0.f,0.f, 1.f));
+  //normalized dot product
+  float ForwardsDot = WallRun.ForwardVector.GetSafeNormal().Dot(GetVelocity().GetSafeNormal());
+  WallRun.ForwardVector *= ForwardsDot;
+  WallRun.ForwardVector.Normalize();
+  float ForwardsDot2 = WallRun.ForwardVector.Dot(GetVelocity().GetSafeNormal());
+
+  //same with the upvector
+  WallRun.UpVector = WallRun.Normal.Cross(WallRun.ForwardVector);
+  //normalized dot product
+  float UpsDot = WallRun.UpVector.GetSafeNormal().Dot(FVector(0.f,0.f,1.f));
+  WallRun.UpVector *= UpsDot;
+  WallRun.UpVector.Normalize();
+  float UpsDot2 = WallRun.UpVector.Dot(FVector(0.f, 0.f, 1.f));
+
+  //angle between (0, 0, 1) and Wall UpVector
+  float AngleBtwnUps = UKismetMathLibrary::DegAcos(UpsDot2);
+  //angle between Actor and Wall Forward vectors
+  float AngleBtwnForwards = UKismetMathLibrary::DegAcos(ForwardsDot2);
+  UKismetSystemLibrary::PrintString(this, "anglebtwnups: " + FString::SanitizeFloat(AngleBtwnUps));
+  UKismetSystemLibrary::PrintString(this, "anglebtwnforwards: " + FString::SanitizeFloat(AngleBtwnForwards));
+  //calculate roll
+  float AngleX = (15 + AngleBtwnUps)*UKismetMathLibrary::DegCos(AngleBtwnForwards)*UKismetMathLibrary::SignOfFloat(WallRun.Normal.Dot(GetActorRightVector()));
+  //calculate pitch
+  float AngleY = (15 + AngleBtwnUps)*UKismetMathLibrary::DegSin(AngleBtwnForwards)*-1;
+  WallRun.LeanInRotator = FRotator(0.f, AngleY, AngleX);
+}
+
+void AAPlatformerCharacter::UpdateLeanIn(float Value)
+{
+  FirstPersonCameraComponent->SetRelativeRotation(WallRun.LeanInRotator*Value);
+}
+
+void AAPlatformerCharacter::UpdateZVelocity(float Value)
+{
+  float NewZVelocity = FMath::Lerp(WallRun.InVector.Z, 0.f, Value);
+  LaunchCharacter(FVector(0.f,0.f,NewZVelocity), false, true);
+}
+
 AAPlatformerCharacter::AAPlatformerCharacter()
 {
 	// Character doesnt have a rifle at start
 	bHasRifle = false;
 	
 	// Set size for collision capsule
-	GetCapsuleComponent()->InitCapsuleSize(55.f, 96.0f);
+	GetCapsuleComponent()->InitCapsuleSize(40.f, 96.0f);
   
   //create a spring arm so the camera can be rotated
   SpringArm = CreateDefaultSubobject<USpringArmComponent>(TEXT("SpringArm"));
@@ -759,7 +934,7 @@ AAPlatformerCharacter::AAPlatformerCharacter()
 
 	// Create a CameraComponent	
 	FirstPersonCameraComponent = CreateDefaultSubobject<UCameraComponent>(TEXT("FirstPersonCamera"));
-	FirstPersonCameraComponent->SetupAttachment(SpringArm);
+	FirstPersonCameraComponent->SetupAttachment(SpringArm, USpringArmComponent::SocketName);
 	FirstPersonCameraComponent->SetRelativeLocation(FVector(0.f,0.f,0.f)); // Position the camera
 	FirstPersonCameraComponent->bUsePawnControlRotation = true;
 
@@ -827,7 +1002,7 @@ void AAPlatformerCharacter::Tick(float DeltaSeconds)
   }
   TickDelegate.Broadcast();
 
-  //not copy pasted
+  //totally not copy pasted
   if (GetClass()->HasAnyClassFlags(CLASS_CompiledFromBlueprint) || !GetClass()->HasAnyClassFlags(CLASS_Native))
 	{
 		// Blueprint code outside of the construction script should not run in the editor
@@ -874,12 +1049,11 @@ void AAPlatformerCharacter::SetupPlayerInputComponent(class UInputComponent* Pla
 		//Moving
 		EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Triggered, this, &AAPlatformerCharacter::Move);
 
-    //for climbing
     EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Triggered, this, &AAPlatformerCharacter::MoveInputActionMethod);
     EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Completed, this, &AAPlatformerCharacter::StopClimbingActionMethod);
 
     //wall running
-    EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Completed, this, &AAPlatformerCharacter::WallRunCompute);
+    EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Completed, this, &AAPlatformerCharacter::WallRunLetGo);
 
     //ledge cancel
     EnhancedInputComponent->BindAction(MoveAction, ETriggerEvent::Started, this, &AAPlatformerCharacter::StopLedgeHangAndClimbing);
@@ -904,6 +1078,48 @@ void AAPlatformerCharacter::Move(const FInputActionValue& Value)
 
 	if (Controller != nullptr)
 	{
+  if (WallRun.bIsRunning || WallRun.bLeaning)
+  {
+    //wallrun movement controls
+    //copied from calculatemaxleanin to get the forward angle btwn, but using actorforwardvector instead of velocity
+
+    //create a forwardvector parallel to the wall in the direction of the player's movement
+    WallRun.ForwardVector = WallRun.Normal.Cross(FVector(0.f,0.f, 1.f));
+    //normalized dot product
+    float ForwardsDot = WallRun.ForwardVector.GetSafeNormal().Dot(GetVelocity().GetSafeNormal());
+    WallRun.ForwardVector *= ForwardsDot;
+    WallRun.ForwardVector.Normalize();
+    float ForwardsDot2 = WallRun.ForwardVector.Dot(GetActorForwardVector().GetSafeNormal());
+
+    //angle between Actor and Wall Forward vectors
+    float AngleBtwnForwards = UKismetMathLibrary::DegAcos(ForwardsDot2);
+
+    if (MovementVector.X != 0.f)
+    {
+      AddMovementInput(GetActorRightVector(), MovementVector.X * StrafeMultiplier);
+    }
+    UKismetSystemLibrary::PrintString(this, "in move controls: your forward angle between is " + FString::SanitizeFloat(AngleBtwnForwards));
+    if (AngleBtwnForwards < 40.f)
+    {
+      //angle between forwards less than 40 means you can't move forward or back
+      bIsMoveInputReleased = false;
+      LastMoveInput = MovementVector;
+      return;
+    }
+    if (MovementVector.Y>0)
+    {
+		  AddMovementInput(GetActorForwardVector(), MovementVector.Y * ForwardMultiplier);
+    }
+    else
+    {
+      AddMovementInput(GetActorForwardVector(), MovementVector.Y);
+    }
+
+    bIsMoveInputReleased = false;
+    LastMoveInput = MovementVector;
+    return;
+  }
+
 		// add movement 
     if (MovementVector.Y>0)
     {
@@ -915,12 +1131,13 @@ void AAPlatformerCharacter::Move(const FInputActionValue& Value)
     }
 
 		AddMovementInput(GetActorRightVector(), MovementVector.X * StrafeMultiplier);
-    //lurching meant for digital inputs as expected (doesn't take forward or strafe multiplier into account)
+    //lurching meant for digital inputs as expected (doesn't take forward or strafe multiplier into account), can't lurch while wallrunning or leaning
     //first check if new direction pressed (not released)
     if (MovementVector.Size() >= LastMoveInput.Size() && (MovementVector != LastMoveInput || bIsMoveInputReleased))
     {
       //get the time since last jump and lurch if is less than periodmax
       int TimeSinceJump = 0.4 - GetWorld()->GetTimerManager().GetTimerRemaining(OnJumpedHandle);
+      UKismetSystemLibrary::PrintString(this, "lurch check moment");
       if (TimeSinceJump >= 0.4)
       {
         bIsMoveInputReleased = false;
@@ -960,9 +1177,9 @@ void AAPlatformerCharacter::Move(const FInputActionValue& Value)
       UKismetSystemLibrary::PrintString(this, "period multiplier " + FString::SanitizeFloat(LurchPeriodMultiplier));
       LaunchCharacter(FinalLurchVector, true, false);
     }
+    bIsMoveInputReleased = false;
+    LastMoveInput = MovementVector;
 	}
-  bIsMoveInputReleased = false;
-  LastMoveInput = MovementVector;
 }
 
 void AAPlatformerCharacter::Look(const FInputActionValue& Value)
@@ -981,11 +1198,27 @@ void AAPlatformerCharacter::Look(const FInputActionValue& Value)
 void AAPlatformerCharacter::JumpE()
 {
   Jump();
+  if (WallRun.bIsRunning || GetWorld()->GetTimerManager().GetTimerRemaining(WallRun.CoyoteHandle) > 0.f)
+  {
+    //wall run jump
+    UKismetSystemLibrary::PrintString(this, "trying to cancel for wall jump");
+    WallRunJump();
+    WallRunCancel();
+    GetWorld()->GetTimerManager().SetTimer(OnJumpedHandle, this, &AAPlatformerCharacter::ResetClimbCooldown, 0.4, false);
+    return;
+  }
+  if (WallRun.bLeaning)
+  {
+    WallRunCancel();
+    return;
+  }
+  
   if (bSuperGlideSlideQueued)
   {
     bSuperGlideSlideQueued = false;
     UKismetSystemLibrary::PrintString(this, "Superglide successful");
     SuperGlide();
+    OnJumped();
   }
   if (bCoyoteTime)
   {
@@ -1004,25 +1237,12 @@ void AAPlatformerCharacter::JumpE()
     TArray<AActor*> EmptyActorArray;
     FHitResult HitResult;
     float Multiplier = GetCapsuleComponent()->GetScaledCapsuleHalfHeight() * -1.15;
-    if (UKismetSystemLibrary::LineTraceSingle(this, GetActorLocation(), GetActorLocation() + GetActorUpVector() * Multiplier, ETraceTypeQuery::TraceTypeQuery1, false, EmptyActorArray, EDrawDebugTrace::ForOneFrame, HitResult, true))
+    if (UKismetSystemLibrary::LineTraceSingle(this, GetActorLocation(), GetActorLocation() + FVector(0.f, 0.f, Multiplier), ETraceTypeQuery::TraceTypeQuery1, false, EmptyActorArray, EDrawDebugTrace::ForOneFrame, HitResult, true))
     {
       if (!LandedDelegate.Contains(this, FName("BufferedJump")))
       {
         LandedDelegate.AddDynamic(this, &AAPlatformerCharacter::BufferedJump);
       }
-      return;
-    }
-    if (WallRun.bIsRunning)
-    {
-      //wall run jump
-      WallRunDetect(true);
-      WallRunJump();
-      return;
-    }
-    if (WallRun.bLeaning)
-    {
-      WallRunDetect(true);
-      WallRunCancel();
       return;
     }
     if (DoubleJumpCount > 0 && !bCanWallJump)
@@ -1516,7 +1736,8 @@ void AAPlatformerCharacter::Landing_Implementation(const FHitResult& Hit)
   GetWorld()->GetTimerManager().ClearTimer(OnJumpedHandle);
 
   //reset wall running
-  WallRun.Reset();
+  UKismetSystemLibrary::PrintString(this, "attempting to reset wallrun struct");
+  GetWorld()->GetTimerManager().SetTimerForNextTick(this, &AAPlatformerCharacter::WallRunReset);
 }
 
 void AAPlatformerCharacter::JumpPadBoost_Implementation(double VelocityZ)
@@ -1530,7 +1751,7 @@ void AAPlatformerCharacter::OnJumped_Implementation()
   UKismetSystemLibrary::PrintString(this, "timer invalidated");
   UKismetSystemLibrary::K2_ClearAndInvalidateTimerHandle(this, JumpFatigueTimerHandle);
 
-  //double jump cooldown
+  //double jump cooldown to make sure player doesn't get punished when double clicking jump within 0.1s
   bDoubleJumpCooldown = true;
   GetWorld()->GetTimerManager().SetTimer(DoubleJumpCooldownHandle, this, &AAPlatformerCharacter::SetDoubleJumpCooldownFalse, 0.1, false);
   //right now just for lurching

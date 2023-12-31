@@ -20,6 +20,7 @@ class UMainGI;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FTickDelegateSignature);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FJumpDelegateSignature);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FWallRunResetDelegateSignature);
 
 UENUM(BlueprintType)
 enum class EGravShiftDirection : uint8
@@ -34,60 +35,76 @@ USTRUCT(BlueprintType)
 struct FWallRunStruct
 {
   GENERATED_BODY()
-  //might have to do UPROPERTY s
   
   FVector VelocityLastTick = FVector();
 
   float MaxSpeedXY = 1000.f;
   
+  UPROPERTY(BlueprintReadOnly)
   FTimerHandle Handle;
 
   float CoyoteTime = 0.1;
 
   FTimerHandle CoyoteHandle;
 
+  UPROPERTY(BlueprintReadOnly)
   bool bIsRunning = false;
 
+  UPROPERTY(BlueprintReadOnly)
   //you can't wallrun multiple times on the same wall without losing height
   float Height = -69420.f;
 
+  UPROPERTY(BlueprintReadOnly)
   AActor *Wall = nullptr;
 
+  UPROPERTY(BlueprintReadOnly)
   //wall running will be time/general area based, not wall based (so bool is used instead of tag)
   bool bCanRun = false;
 
-  //idk why this is in here, I don't really have a use for it yet but maybe eventually
+  //idk why this is in here, it's kinda redundant
   FVector InVector = FVector();
 
   FVector OutVector = FVector();
 
   FVector Normal = FVector();
 
+  //going up parallel to wall
+  FVector UpVector = FVector();
+
+  //going forward prallel to wall
+  FVector ForwardVector = FVector();
+
+  //lean in rotator:
+  FRotator LeanInRotator = FRotator();
+
+  UPROPERTY(BlueprintReadOnly)
+  bool SameWallCooldown = false;
+
   //if player double jumped since last coming off ground or wall
   bool bDoubleJumped = false;
 
   bool bGetVelocity = false;
 
+  UPROPERTY(BlueprintReadOnly)
   //if player is currently in the lean in animation
   bool bLeaning = false;
-
-  //called upon landing
-  void Reset()
-  {
-    VelocityLastTick = FVector();
-    bIsRunning = false;
-    Height = -69420.f;
-    Wall = nullptr;
-    bCanRun = false;
-    InVector = FVector();
-    OutVector = FVector();
-    bDoubleJumped = false;
-  }
 };
 UCLASS(config=Game)
 class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
 {
 	GENERATED_BODY()
+
+  UFUNCTION()
+  void WallRunReset();
+
+  UFUNCTION(BlueprintCallable)
+  void WallRunSetIsRunning(bool Value);
+
+  UFUNCTION(BlueprintCallable)
+  void WallRunSetLeaning(bool Value);
+
+  UFUNCTION(BlueprintCallable)
+  void WallRunSetSameWallCooldown(bool Value);
 
 	/** Pawn mesh: 1st person view (arms; seen only by self) */
 	UPROPERTY(VisibleDefaultsOnly, Category=Mesh)
@@ -98,7 +115,7 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
 	UCameraComponent* FirstPersonCameraComponent;
 
   //spring arm camera is attached to
-  UPROPERTY()
+  UPROPERTY(VisibleAnywhere, BlueprintReadWrite, meta = (AllowPrivateAccess = "true"))
   USpringArmComponent *SpringArm;
 
   //ref to player controller
@@ -120,7 +137,7 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
   void MoveInputActionMethod(const FInputActionValue& Value);
 
   //delegate that is broadcasted every single tick
-  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, meta = (AllowPrivateAccess = "true"))
+  UPROPERTY(VisibleAnywhere, BlueprintReadWrite, meta = (AllowPrivateAccess = "true"))
   FTickDelegateSignature TickDelegate;
 
   //delegate that is broadcasted every jump
@@ -430,9 +447,16 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
   UFUNCTION()
   void SetVelocityLastTick() {WallRun.VelocityLastTick = VelocityButEvenBeforeNextTick;}
 
+  UPROPERTY(BlueprintReadWrite, Category = WallRun)
   FWallRunStruct WallRun;
+  
+  UFUNCTION(BlueprintCallable)
+  void WallRunHandleReset();
 
-  //TODO should use general move input function to make sure order is correct
+  UFUNCTION(BlueprintCallable)
+  void WallRunHandleStart();
+
+  //when wall running, you have to hold w and forward input is nullified in move so player can stick to wall, strafing is not nullified so you can strafe off of a wall
   //called every tick while moving (works if bCanRun)
   UFUNCTION(BlueprintCallable, Category = WallRun)
   void WallRunCompute(const FInputActionValue& Value);
@@ -442,17 +466,28 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
   UFUNCTION(BlueprintCallable, Category = WallRun)
   bool WallRunDetect(bool ForWallRunStop = false, bool OnlyCollisionCheck = false);
 
+  //used to set samewallcooldown to false if not in collision with the same wall or any actor
+  UFUNCTION()
+  void SameWallDetect();
+
+  //checks if self is already binded and binds to tick delegate if not already binded
+  UFUNCTION(BlueprintCallable, Category = WallRun)
+  void BindSameWallDetect();
+
   //additionally unbinds getvelocity, adds one double jump if bDoubleJumped
   UFUNCTION(BlueprintCallable, Category = WallRun)
   void WallRunStart();
 
-  //also rebinds getvelocity and gives a very small amount of coyote time to end boost (can be triggered on crouch, 1.75s on wall (called in timeline stop), strafing away enough from wall)
+  //also rebinds getvelocity and gives a very small amount of coyote time to end boost (can be triggered on crouch, 1.75s on wall, looking too far away or in when wall running, strafing away enough from wall)
   UFUNCTION(BlueprintCallable, Category = WallRun)
   void WallRunCancel();
 
   //checks if wall running or leaning, stops leaning or running via cancel if so (sets timer to cancel in 0.25s if so)
   UFUNCTION(BlueprintCallable, Category = WallRun)
   void WallRunLetGo();
+
+  FTimerHandle LetGoHandle;
+  FTimerHandle LetGoHandle2;
 
   //called inside wallruncompute if player needs boost on wall
   UFUNCTION(BlueprintCallable, Category = WallRun)
@@ -470,11 +505,9 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
   UFUNCTION(BlueprintCallable, Category = WallRun)
   void WallBump();
 
-  //note: spring arm's camera lag feature can be used instead of timelines for camera rotation
-
-
-  //does lean in animation for 0.25s while adjusting (for 0.3s) player's z velocity to zero, starts wall running, starts return camera angle after 1.25s of running
-  //wallruncancel is called after 1.75s of running, sets bLeaning true
+  //TODO: blueprint implementables
+  //does lean in animation (sets bLeaning true) for 0.25s while adjusting (for 0.3s) player's z velocity to zero, starts wall running after
+  //starts to return camera angle after 1.25s of running, wallruncancel is called after 1.75s of running
   UFUNCTION(BlueprintImplementableEvent)
   void WallRunStartTimelineBegin();
 
@@ -482,6 +515,18 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
   UFUNCTION(BlueprintImplementableEvent)
   void WallRunStartTimelineStop();
 
+  //function to calculate max lean in angle
+  UFUNCTION(BlueprintCallable, Category = WallRun)
+  void CalculateMaxLeanIn();
+  //timeline function for lean in/lean out, sets the camera to the correct base (relative) angle for the wall multiplied by the value which should be between 0 and 1
+  UFUNCTION(BlueprintCallable, Category = WallRun)
+  void UpdateLeanIn(float Value);
+
+  UFUNCTION(BlueprintCallable, Category = WallRun)
+  //timeline function for updating z velocity (called in lean in)
+  void UpdateZVelocity(float Value);
+
+  public:
   //additionally binds a getvelocity to end of wallrundetect
   UFUNCTION(BlueprintCallable, Category = WallRun)
   void SetCanWallRunTrue();
