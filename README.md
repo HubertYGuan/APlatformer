@@ -30,7 +30,8 @@ A platformer/FPS made in Unreal Engine 5.2.
 	- Comes at the cost of total speed (more sharp = more speed loss)
 - **Supergliding**
 	- Press crouch and then jump in quick succession at the end of a mantle to boost forward
-- **Wall Running *(WIP)***
+- **Wall Running **
+  	- Basically Titanfall 2 (very original)
 ### Levels
 - 2 tutorial levels to unlock and get used to movement and game mechanics
 - (to be added) Further levels with enemies and objectives
