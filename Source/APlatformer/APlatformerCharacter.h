@@ -6,6 +6,7 @@
 #include "GameFramework/Character.h"
 #include "InputActionValue.h"
 #include "OverlapInterface.h"
+#include "InteractInterface.h"
 #include "APlatformerCharacter.generated.h"
 
 class UInputComponent;
@@ -17,6 +18,7 @@ class UAnimMontage;
 class USoundBase;
 class APCThing;
 class UMainGI;
+class AInteractable;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FTickDelegateSignature);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FJumpDelegateSignature);
@@ -88,9 +90,12 @@ struct FWallRunStruct
   UPROPERTY(BlueprintReadOnly)
   //if player is currently in the lean in animation
   bool bLeaning = false;
+  //if player is currently in the cancel wallrunning animation
+  UPROPERTY(BlueprintReadOnly)
+  bool bCancellingAnim = false;
 };
 UCLASS(config=Game)
-class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
+class AAPlatformerCharacter : public ACharacter, public IOverlapInterface, public IInteractInterface
 {
 	GENERATED_BODY()
 
@@ -105,6 +110,9 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
 
   UFUNCTION(BlueprintCallable)
   void WallRunSetSameWallCooldown(bool Value);
+
+  UFUNCTION(BlueprintCallable)
+  void WallRunSetCancellingAnim(bool Value);
 
 	/** Pawn mesh: 1st person view (arms; seen only by self) */
 	UPROPERTY(VisibleDefaultsOnly, Category=Mesh)
@@ -456,6 +464,9 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
   UFUNCTION(BlueprintCallable)
   void WallRunHandleStart();
 
+  UFUNCTION(BlueprintCallable)
+  void WallRunCoyoteClear();
+
   //when wall running, you have to hold w and forward input is nullified in move so player can stick to wall, strafing is not nullified so you can strafe off of a wall
   //called every tick while moving (works if bCanRun)
   UFUNCTION(BlueprintCallable, Category = WallRun)
@@ -505,7 +516,6 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
   UFUNCTION(BlueprintCallable, Category = WallRun)
   void WallBump();
 
-  //TODO: blueprint implementables
   //does lean in animation (sets bLeaning true) for 0.25s while adjusting (for 0.3s) player's z velocity to zero, starts wall running after
   //starts to return camera angle after 1.25s of running, wallruncancel is called after 1.75s of running
   UFUNCTION(BlueprintImplementableEvent)
@@ -564,6 +574,9 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface
   //grav float when held
   UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=Input, meta=(AllowPrivateAccess = "true"))
 	class UInputAction* GravReduceAction;
+  //interact key to press or hold down
+  UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=Input, meta=(AllowPrivateAccess = "true"))
+	class UInputAction* InteractAction;
 
 	/** Move Input Action */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=Input, meta=(AllowPrivateAccess = "true"))
@@ -625,11 +638,76 @@ protected:
 	void Look(const FInputActionValue& Value);
 
   void JumpE();
+  //TODO, also implement the camera panning across the level
+
+//todo timeline animation is broken after finishing once with interactable device
+//I didn't realize widgetinteraction component was a thing bruh
+
+  void StartInteract();
+
+  void StopInteract();
+
+  bool bIsInteracting;
+
+  bool bIsHovering;
+
+  //hovered actor's location
+  FVector HoveredPosition = FVector();
+
+  public:
+  UFUNCTION(BlueprintCallable, Category = Interact)
+  FVector GetHoveredPosition(){return HoveredPosition;}
+
+  UFUNCTION(BlueprintCallable, Category = Interact)
+  void SetIsInteractingFalse(){bIsInteracting = false;}
+
+  UFUNCTION(BlueprintCallable, Category = Interact)
+  bool GetIsInteracting(){return bIsInteracting;}
+
+  protected:
+
+  UPROPERTY(BlueprintReadOnly)
+  TScriptInterface<IInteractInterface> HoveredInteractable;
+
+  UFUNCTION()
+  //function binded to tick
+  void HoverCompute();
+
+  //linetrace for hovercompute, see what the player hovers over and tries to interact with and sets hovered interactable
+  bool HoverDetect();
 
   FTimerHandle SuperglideInitiateHandle;
 
   UFUNCTION(BlueprintCallable)
   void UpdatePosition(float Value);
+
+  public:
+  UPROPERTY(BlueprintReadWrite)
+  FVector CameraPanLocation;
+
+  UPROPERTY(BlueprintReadWrite)
+  FVector CameraPanReturnLocation;
+
+  UPROPERTY(BlueprintReadWrite)
+  FVector CameraPanInitLocation;
+
+  UPROPERTY(BlueprintReadWrite)
+  FRotator CameraPanRotation;
+
+  UPROPERTY(BlueprintReadWrite)
+  FRotator CameraPanReturnRotation;
+
+  UPROPERTY(BlueprintReadWrite)
+  FRotator CameraPanInitRotation;
+
+  //this isn't in kismetmathlibrary for some reason
+  FVector VectorLerp(FVector A, FVector B, double Alpha);
+
+  FRotator RotatorLerp(FRotator A, FRotator B, double Alpha);
+
+  protected:
+  UFUNCTION(BlueprintCallable)
+  void UpdateCameraTransform(float Value, bool Returning);
 
   UFUNCTION(BlueprintImplementableEvent)
   void MantleTimelinePlay();

@@ -33,7 +33,10 @@ void AAPlatformerCharacter::WallRunReset()
   WallRun.LeanInRotator = FRotator();
   WallRun.SameWallCooldown = false;
   WallRun.bDoubleJumped = false;
+  WallRun.bCancellingAnim = false;
   WallRunHandleReset();
+  WallRunCoyoteClear();
+  UpdateLeanIn(0.f);
   UKismetSystemLibrary::PrintString(this, "wall run reset successful");
   UKismetSystemLibrary::PrintString(this, FString::SanitizeFloat(WallRun.Height));
 }
@@ -51,6 +54,11 @@ void AAPlatformerCharacter::WallRunSetLeaning(bool Value)
 void AAPlatformerCharacter::WallRunSetSameWallCooldown(bool Value)
 {
   WallRun.SameWallCooldown = Value;
+}
+
+void AAPlatformerCharacter::WallRunSetCancellingAnim(bool Value)
+{
+  WallRun.bCancellingAnim = Value;
 }
 
 void AAPlatformerCharacter::EnableMoveInput(const FHitResult &Hit)
@@ -382,10 +390,155 @@ void AAPlatformerCharacter::LedgeMantle()
   }
 }
 
+void AAPlatformerCharacter::HoverCompute()
+{
+  //amazing efficiency::vvvv
+  HoverDetect();
+}
+
+bool AAPlatformerCharacter::HoverDetect()
+{
+  FHitResult HitResult;
+  FVector StartLocation = GetFirstPersonCameraComponent()->GetComponentLocation();
+  FVector EndLocation = StartLocation + (GetFirstPersonCameraComponent()->GetForwardVector() * 500.f);
+
+  GetWorld()->LineTraceSingleByChannel(HitResult, StartLocation, EndLocation, ECC_Visibility);
+
+  if (!HitResult.bBlockingHit)
+  {
+    //either stopped hovering or was never hovering in the first place
+    if (!HoveredInteractable.GetObject())
+    {
+      HoveredPosition = FVector();
+      bIsHovering = false;
+      return false;
+    }
+    else if (HoveredInteractable.GetInterface())
+    {
+      UKismetSystemLibrary::PrintString(this, "ending hover");
+    HoveredInteractable.GetInterface()->EndHover(this);
+    HoveredInteractable.SetObject(nullptr);
+    HoveredInteractable.SetInterface(nullptr);
+    HoveredPosition = FVector();
+    bIsHovering = false;
+    return false;
+    }
+  }
+  AActor* HitActor = HitResult.GetActor();
+
+  if (IInteractInterface *Interactable = Cast<IInteractInterface>(HitActor))
+  {
+    //this is the old interface, not the new one that we're hovering over (or maybe it is the same)
+    IInteractInterface *Interface = HoveredInteractable.GetInterface();
+    AActor *OldActor = Cast<AActor>(HoveredInteractable.GetObject());
+  if (!Interactable->GetOnCooldown())
+  {
+    if (OldActor == nullptr)
+    {
+      UKismetSystemLibrary::PrintString(this, "hover actor found");
+      //start hovering on something after not hovering
+      HoveredInteractable.SetObject(HitActor);
+      HoveredInteractable.SetInterface(Interactable);
+      Interactable->StartHover(this);
+      HoveredPosition = HitActor->GetActorLocation();
+      bIsHovering = true;
+      return true;
+    }
+    else if (OldActor == HitActor)
+    {
+      UKismetSystemLibrary::PrintString(this, "continuing to hover");
+      //continue hovering on the same thing if not on cooldown
+    }
+    else
+    {
+      //transfer hovering from old to new
+      UKismetSystemLibrary::PrintString(this, "ending hover by switching");
+      Interface->EndHover(this);
+      HoveredInteractable.SetObject(HitActor);
+      HoveredInteractable.SetInterface(Interactable);
+      Interactable->StartHover(this);
+      HoveredPosition = HitActor->GetActorLocation();
+      bIsHovering = true;
+      return true;
+    }
+  }
+    else
+  {
+    if (bIsHovering)
+    {
+      //if the newest thing is on cooldown, stop hovering
+      UKismetSystemLibrary::PrintString(this, "nulling object, on cooldown");
+      Interactable->EndHover(this);
+      HoveredInteractable.SetObject(nullptr);
+      HoveredInteractable.SetInterface(nullptr);
+      HoveredPosition = FVector();
+      bIsHovering = false;
+      return false;
+    }
+  }
+  }
+  return false;
+}
+
 void AAPlatformerCharacter::UpdatePosition(float Value)
 {
   FVector NewLocation = FMath::Lerp(MantleStart, MantleTarget, Value);
   SetActorLocation(NewLocation);
+}
+
+FVector AAPlatformerCharacter::VectorLerp(FVector A, FVector B, double Alpha)
+{
+  return FVector(UKismetMathLibrary::Lerp(A.X, B.X, Alpha), UKismetMathLibrary::Lerp(A.Y, B.Y, Alpha), UKismetMathLibrary::Lerp(A.Z, B.Z, Alpha));
+}
+
+FRotator AAPlatformerCharacter::RotatorLerp(FRotator A, FRotator B, double Alpha)
+{
+  double BPitch = B.Pitch;
+  double BYaw = B.Yaw;
+  double BRoll = B.Roll;
+  double APitch = A.Pitch;
+  double AYaw = A.Yaw;
+  double ARoll = A.Roll;
+  if (BPitch>180.f)
+  {
+    BPitch-=360.f;
+  }
+  if (BYaw>180.f)
+  {
+    BYaw-=360.f;
+  }
+  if (BRoll>180.f)
+  {
+    BRoll-=360.f;
+  }
+  if (APitch>180.f)
+  {
+    APitch-=360.f;
+  }
+  if (AYaw>180.f)
+  {
+    AYaw-=360.f;
+  }
+  if (ARoll>180.f)
+  {
+    ARoll-=360.f;
+  }
+
+  return FRotator(UKismetMathLibrary::Lerp(APitch, BPitch, Alpha), UKismetMathLibrary::Lerp(AYaw, BYaw, Alpha), UKismetMathLibrary::Lerp(ARoll, BRoll, Alpha));
+}
+
+void AAPlatformerCharacter::UpdateCameraTransform(float Value, bool Returning)
+{
+  if (Returning)
+  {
+    FirstPersonCameraComponent->SetWorldLocation(VectorLerp(CameraPanReturnLocation, CameraPanLocation, Value), false);
+    PCRef->SetControlRotation(RotatorLerp(CameraPanReturnRotation, CameraPanRotation, Value));
+  }
+  else
+  {
+    FirstPersonCameraComponent->SetWorldLocation(VectorLerp(CameraPanInitLocation, CameraPanLocation, Value), false);
+    PCRef->SetControlRotation(RotatorLerp(CameraPanInitRotation, CameraPanRotation, Value));
+  }
 }
 
 void AAPlatformerCharacter::StopLedgeHangAndClimbing(const FInputActionValue &InputActionValue)
@@ -516,6 +669,11 @@ void AAPlatformerCharacter::WallRunHandleStart()
   GetWorld()->GetTimerManager().SetTimer(WallRun.Handle, this, &AAPlatformerCharacter::ResetSlideCooldown, 1.75, false);
 }
 
+void AAPlatformerCharacter::WallRunCoyoteClear()
+{
+  GetWorld()->GetTimerManager().ClearTimer(WallRun.CoyoteHandle);
+}
+
 void AAPlatformerCharacter::WallRunCompute(const FInputActionValue &Value)
 {
   if (!WallRun.bCanRun)
@@ -531,7 +689,6 @@ void AAPlatformerCharacter::WallRunCompute(const FInputActionValue &Value)
     return;
   }
   GetWorld()->GetTimerManager().ClearTimer(LetGoHandle);
-  GetWorld()->GetTimerManager().ClearTimer(LetGoHandle2);
 
   bool bOnWall = WallRunDetect(false, true);
 
@@ -651,7 +808,9 @@ bool AAPlatformerCharacter::WallRunDetect(bool ForWallRunStop, bool OnlyCollisio
         return true;
       }
       //height check, can only wall jump on same wall if lower (can freely if different walls)
-      if (!WallRun.bIsRunning && ((GetActorLocation().Z >= WallRun.Height - 400.f && WallRun.Height != -69420.f) || WallRun.SameWallCooldown) && HitActor == WallRun.Wall)
+      UKismetSystemLibrary::PrintString(this, "isrunning: " + FString::FromInt(WallRun.bIsRunning) + " does hitactor == the wall: "+ FString::FromInt(HitActor == WallRun.Wall));
+      //hitactor not equalling the wall bruh, seems like wallrunwall is still nullptr
+      if (!WallRun.bIsRunning && ((GetActorLocation().Z >= WallRun.Height - 50.f && WallRun.Height != -69420.f) || WallRun.SameWallCooldown) && HitActor == WallRun.Wall)
       {
         UKismetSystemLibrary::PrintString(this, "height too high or not reset and same wall false");
         return false;
@@ -681,7 +840,7 @@ void AAPlatformerCharacter::SameWallDetect()
   FVector StartLocation = GetActorLocation();
 
   //you need to be pretty clear of the wall to clear the samewallcooldown
-  FCollisionShape MyCapsule = FCollisionShape::MakeCapsule(80.5, 66.f);
+  FCollisionShape MyCapsule = FCollisionShape::MakeCapsule(50.5, 66.f);
 
   bool bHit = GetWorld()->SweepMultiByChannel(HitResults, StartLocation, StartLocation+FVector(0, 0, -25.f), FQuat::Identity, ECC_Visibility, MyCapsule);
 
@@ -695,8 +854,8 @@ void AAPlatformerCharacter::SameWallDetect()
         UKismetSystemLibrary::PrintString(this, "nullptr error");
         return;
       }
-      //check if it's a trigger
-      if (!Cast<UShapeComponent>(Hit.GetComponent()) || HitActor == WallRun.Wall)
+      //check if it's the hitactor
+      if (HitActor == WallRun.Wall)
       {
         return;
       }
@@ -729,7 +888,6 @@ void AAPlatformerCharacter::WallRunCancel()
   WallRunStartTimelineStop();
   WallRun.bGetVelocity = true;
   GetWorld()->GetTimerManager().SetTimer(WallRun.CoyoteHandle, this, &AAPlatformerCharacter::ResetSlideCooldown, 0.1, false);
-  WallRun.bIsRunning = false;
 }
 
 void AAPlatformerCharacter::WallRunLetGo()
@@ -738,8 +896,11 @@ void AAPlatformerCharacter::WallRunLetGo()
   {
     return;
   }
+  else if (WallRun.bLeaning)
+  {
+    WallRunCancel();
+  }
   GetWorld()->GetTimerManager().SetTimer(LetGoHandle, this, &AAPlatformerCharacter::WallRunCancel, 0.5, false);
-  GetWorld()->GetTimerManager().SetTimer(LetGoHandle2, this, &AAPlatformerCharacter::WallRunStartTimelineStop, 0.5, false);
 }
 
 void AAPlatformerCharacter::WallRunBoost()
@@ -772,6 +933,7 @@ void AAPlatformerCharacter::WallRunSlow()
 
 void AAPlatformerCharacter::WallRunJump()
 {
+  //crouch kicking not working is a feature not a bug
   UKismetSystemLibrary::PrintString(this, "calling wallrunjump");
   //one factor to determine magnitude of outvector (additive):
   float TimeOnWall = GetWorld()->GetTimerManager().GetTimerElapsed(WallRun.Handle);
@@ -780,12 +942,7 @@ void AAPlatformerCharacter::WallRunJump()
   //this velocity should be parallel to the wall and perpendicular to wall normal (if I didn't break wall run speed gain)
   FVector2D VelocityXY = FVector2D(GetVelocity().X, GetVelocity().Y);
 
-  float NormalMultiplier = 300.f;
-  //end boosting/coyote time makes normal bounce stronger
-  if (GetWorld()->GetTimerManager().GetTimerRemaining(WallRun.CoyoteHandle) > 0.f)
-  {
-    NormalMultiplier+=100.f;
-  }
+  float NormalMultiplier = 500.f;
   
   //reflect like the wall jump (can be modified if end boosting i.e. coyote time)
   WallRun.OutVector = FVector(VelocityXY, 0.f);
@@ -984,6 +1141,7 @@ void AAPlatformerCharacter::BeginPlay()
       
   //Add our landing function to the delegate
   LandedDelegate.AddDynamic(this, &AAPlatformerCharacter::Landing);
+  TickDelegate.AddDynamic(this, &AAPlatformerCharacter::HoverCompute);
 }
 
 void AAPlatformerCharacter::Tick(float DeltaSeconds)
@@ -1067,6 +1225,10 @@ void AAPlatformerCharacter::SetupPlayerInputComponent(class UInputComponent* Pla
 
     //Open the Paused Menu
     EnhancedInputComponent->BindAction(PausedMenuAction, ETriggerEvent::Started, this, &AAPlatformerCharacter::TriggerPausedMenu);
+
+    //interact actions
+    EnhancedInputComponent->BindAction(InteractAction, ETriggerEvent::Started, this, &AAPlatformerCharacter::StartInteract);
+    EnhancedInputComponent->BindAction(InteractAction, ETriggerEvent::Completed, this, &AAPlatformerCharacter::StopInteract);
 	}
 }
 
@@ -1253,6 +1415,31 @@ void AAPlatformerCharacter::JumpE()
   }
   //wall jumping (if reqs met)
   WallJump();
+}
+
+void AAPlatformerCharacter::StartInteract()
+{
+  if (HoveredInteractable.GetInterface() == nullptr)
+  {
+    return;
+  }
+  HoveredInteractable.GetInterface()->StartInteract(this);
+  bIsInteracting = true;
+}
+
+void AAPlatformerCharacter::StopInteract()
+{
+  if (HoveredInteractable.GetInterface() == nullptr || !bIsInteracting)
+  {
+    return;
+  }
+  if (!bIsHovering)
+  {
+    bIsInteracting = false;
+    return;
+  }
+  HoveredInteractable.GetInterface()->CancelInteract(this);
+  bIsInteracting = false;
 }
 
 void AAPlatformerCharacter::CrouchE()
@@ -1948,6 +2135,7 @@ void AAPlatformerCharacter::NotifyActorEndOverlap(AActor *OtherActor)
 
 void AAPlatformerCharacter::LoadSave()
 {
+  //remember todo, update save game to include everything
   //just in case some dumb stuff happened with LoadedSave
   if (UMySaveGame* SaveGameInstance = GIRef->LoadedSave)
   {
@@ -2055,4 +2243,5 @@ void AAPlatformerCharacter::SetCanWallRunFalse()
 {
   WallRun.bCanRun = false;
   WallRunCancel();
+  UpdateLeanIn(0.f);
 }
