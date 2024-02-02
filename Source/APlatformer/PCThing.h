@@ -23,6 +23,10 @@ class APLATFORMER_API APCThing : public APlayerController
   UFUNCTION(BlueprintImplementableEvent, Category = Checkpoint)
   void CreateRespawnScreen();
 
+  //updates the health bar
+  UFUNCTION(BlueprintImplementableEvent, Category = HUD)
+  void UpdateHealthBar(int Health, int MaxHealth);
+
   //Creates a widget to show sprinting is unlocked
   UFUNCTION(BlueprintImplementableEvent, Category = Ability)
   void CreateSprint();

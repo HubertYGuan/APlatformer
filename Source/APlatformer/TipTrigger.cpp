@@ -2,6 +2,7 @@
 
 
 #include "TipTrigger.h"
+#include "PCThing.h"
 
 // Sets default values
 ATipTrigger::ATipTrigger()

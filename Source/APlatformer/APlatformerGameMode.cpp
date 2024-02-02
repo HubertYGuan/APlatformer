@@ -11,7 +11,7 @@ AAPlatformerGameMode::AAPlatformerGameMode()
 	static ConstructorHelpers::FClassFinder<APawn> PlayerPawnClassFinder(TEXT("/Game/FirstPerson/Blueprints/BP_MainCharacter"));
 	DefaultPawnClass = PlayerPawnClassFinder.Class;
 
-  //set default player controller class (no null check lol)
+  //set default player controller class
   static ConstructorHelpers::FClassFinder<APlayerController> PlayerControllerBPClass(TEXT("/Game/FirstPerson/Blueprints/BP_PCThing"));
   if (PlayerControllerBPClass.Class != NULL)
   {

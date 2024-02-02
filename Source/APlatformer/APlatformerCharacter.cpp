@@ -1142,6 +1142,10 @@ void AAPlatformerCharacter::BeginPlay()
   //Add our landing function to the delegate
   LandedDelegate.AddDynamic(this, &AAPlatformerCharacter::Landing);
   TickDelegate.AddDynamic(this, &AAPlatformerCharacter::HoverCompute);
+  OnTakeAnyDamage.AddDynamic(this, &AAPlatformerCharacter::SimpleDamageCompute);
+
+  //set up HUD
+  GetWorld()->GetTimerManager().SetTimerForNextTick(this, &AAPlatformerCharacter::UpdateHealthBarThing);
 }
 
 void AAPlatformerCharacter::Tick(float DeltaSeconds)
@@ -1415,6 +1419,49 @@ void AAPlatformerCharacter::JumpE()
   }
   //wall jumping (if reqs met)
   WallJump();
+}
+
+void AAPlatformerCharacter::SimpleDamageCompute(AActor *DamagedActor, float Damage, const UDamageType *DamageType, AController *InstigatedBy, AActor *DamageCauser)
+{
+  Health -= Damage;
+  GetWorld()->GetTimerManager().ClearTimer(DefaultHealTickHandle);
+  if (Health <= 0)
+  {
+    KillPlayer();
+    GetWorld()->GetTimerManager().ClearTimer(DefaultHealHandle);
+    return;
+  }
+  PCRef->UpdateHealthBar(Health, MaxHealth);
+  //reset and set timer for defualt heal
+  GetWorld()->GetTimerManager().SetTimer(DefaultHealHandle, this, &AAPlatformerCharacter::DefaultHeal, 3, false);
+}
+
+void AAPlatformerCharacter::DefaultHeal()
+{
+  GetWorld()->GetTimerManager().SetTimer(DefaultHealTickHandle, this, &AAPlatformerCharacter::DefaultHealTick, 0.02, true);
+}
+
+void AAPlatformerCharacter::DefaultHealTick()
+{
+  if (Health >= MaxHealth)
+  {
+    Health = MaxHealth;
+    PCRef->UpdateHealthBar(Health, MaxHealth);
+    GetWorld()->GetTimerManager().ClearTimer(DefaultHealTickHandle);
+    return;
+  }
+  Heal(1);
+}
+
+void AAPlatformerCharacter::Heal(int Healing)
+{
+  Health += Healing;
+  PCRef->UpdateHealthBar(Health, MaxHealth);
+}
+
+void AAPlatformerCharacter::UpdateHealthBarThing()
+{
+  PCRef->UpdateHealthBar(Health, MaxHealth);
 }
 
 void AAPlatformerCharacter::StartInteract()
@@ -1971,7 +2018,7 @@ void AAPlatformerCharacter::NotifyHit(UPrimitiveComponent *MyComp, AActor *Other
     switch (TagsMap.FindRef(Name))
     {
     case 1:
-      //Hazard
+      //Hazard, counts as instant death
       KillPlayer();
       break;
     case 2:
@@ -2061,7 +2108,9 @@ void AAPlatformerCharacter::RespawnPlayer_Implementation()
   SlideHeightChange(false);
   PCRef->bShowMouseCursor = false;
   SetActorLocation(LastCheckpointPos);
-  UKismetSystemLibrary::K2_SetTimer(this, "JumpFatigueTimerReset", 0.1, false);
+  UKismetSystemLibrary::K2_SetTimer(this, "JumpFatigueTimerReset", 0.01, false);
+  Health = MaxHealth;
+  UpdateHealthBarThing();
 }
 void AAPlatformerCharacter::KillPlayer_Implementation()
 {
@@ -2073,6 +2122,8 @@ void AAPlatformerCharacter::KillPlayer_Implementation()
   CharMovement->GravityScale = 0.f;
   DisableInput(PCRef);
   PCRef->CreateRespawnScreen();
+  Health = 0;
+  UpdateHealthBarThing();
   }
 }
 void AAPlatformerCharacter::SetHasRifle(bool bNewHasRifle)
@@ -2083,6 +2134,20 @@ void AAPlatformerCharacter::SetHasRifle(bool bNewHasRifle)
 bool AAPlatformerCharacter::GetHasRifle()
 {
 	return bHasRifle;
+}
+
+void AAPlatformerCharacter::AttachShotgun()
+{
+  // Slightly copied from template
+
+
+
+
+}
+
+bool AAPlatformerCharacter::GetHasShotgun()
+{
+  return bHasShotgun;
 }
 
 void AAPlatformerCharacter::SetShoesTrue()

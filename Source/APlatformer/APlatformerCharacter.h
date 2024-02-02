@@ -610,6 +610,16 @@ public:
 	UFUNCTION(BlueprintCallable, Category = Weapon)
 	bool GetHasRifle();
 
+  /** Bool for AnimBP to switch to another animation set */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Weapon)
+	bool bHasShotgun;
+
+	UFUNCTION(BlueprintCallable, Category = Weapon)
+	void AttachShotgun();
+
+	UFUNCTION(BlueprintCallable, Category = Weapon)
+	bool GetHasShotgun();
+
   //to set bHasShoes to true
   UFUNCTION()
   void SetShoesTrue();
@@ -638,9 +648,36 @@ protected:
 	void Look(const FInputActionValue& Value);
 
   void JumpE();
-  //TODO, also implement the camera panning across the level
 
-//todo timeline animation is broken after finishing once with interactable device
+  //Health system 123
+
+  UPROPERTY(BlueprintReadWrite, Category = Health)
+  int Health = 100;
+
+  UPROPERTY(BlueprintReadWrite, Category = Health)
+  int MaxHealth = 100;
+
+  //deals damage and updates HUD, kills player if health 0 or negative
+  UFUNCTION(BlueprintCallable, Category = Health)
+  void SimpleDamageCompute(AActor* DamagedActor, float Damage, const class UDamageType* DamageType, class AController* InstigatedBy, AActor* DamageCauser);
+
+  //the default heal that heals 1 point every 0.02s after not taking damage for 3s
+  UFUNCTION(BlueprintCallable, Category = Health)
+  void DefaultHeal();
+
+  UFUNCTION(BlueprintCallable, Category = Health)
+  void DefaultHealTick();
+
+  //any heal, updates HUD
+  UFUNCTION(BlueprintCallable, Category = Health)
+  void Heal(int Healing);
+
+  FTimerHandle DefaultHealHandle;
+
+  FTimerHandle DefaultHealTickHandle;
+
+  UFUNCTION()
+  void UpdateHealthBarThing();
 //I didn't realize widgetinteraction component was a thing bruh
 
   void StartInteract();
@@ -705,9 +742,11 @@ protected:
 
   FRotator RotatorLerp(FRotator A, FRotator B, double Alpha);
 
-  protected:
+  
   UFUNCTION(BlueprintCallable)
   void UpdateCameraTransform(float Value, bool Returning);
+
+  protected:
 
   UFUNCTION(BlueprintImplementableEvent)
   void MantleTimelinePlay();

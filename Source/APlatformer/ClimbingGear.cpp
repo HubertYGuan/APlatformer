@@ -2,6 +2,7 @@
 
 
 #include "ClimbingGear.h"
+#include "PCThing.h"
 
 // Sets default values
 AClimbingGear::AClimbingGear()
