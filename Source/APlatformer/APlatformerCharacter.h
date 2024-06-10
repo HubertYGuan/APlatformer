@@ -19,6 +19,7 @@ class USoundBase;
 class APCThing;
 class UMainGI;
 class AInteractable;
+class UGunComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FTickDelegateSignature);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FJumpDelegateSignature);
@@ -121,6 +122,10 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface, publi
 	/** First person camera */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"))
 	UCameraComponent* FirstPersonCameraComponent;
+
+  // Another camera for the player mesh to attach to
+  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"))
+	UCameraComponent* MeshCameraComponent;
 
   //spring arm camera is attached to
   UPROPERTY(VisibleAnywhere, BlueprintReadWrite, meta = (AllowPrivateAccess = "true"))
@@ -578,6 +583,21 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface, publi
   UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=Input, meta=(AllowPrivateAccess = "true"))
 	class UInputAction* InteractAction;
 
+  UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=Input, meta=(AllowPrivateAccess = "true"))
+	class UInputAction* HolsterAction;
+
+  UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=Input, meta=(AllowPrivateAccess = "true"))
+	class UInputAction* ReloadAction;
+
+  UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=Input, meta=(AllowPrivateAccess = "true"))
+	class UInputAction* ShootingAction;
+
+  UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=Input, meta=(AllowPrivateAccess = "true"))
+	class UInputAction* EquipAction1;
+
+  UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=Input, meta=(AllowPrivateAccess = "true"))
+	class UInputAction* EquipAction2;
+
 	/** Move Input Action */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=Input, meta=(AllowPrivateAccess = "true"))
 	class UInputAction* MoveAction;
@@ -610,15 +630,88 @@ public:
 	UFUNCTION(BlueprintCallable, Category = Weapon)
 	bool GetHasRifle();
 
-  /** Bool for AnimBP to switch to another animation set */
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Weapon)
 	bool bHasShotgun;
 
-	UFUNCTION(BlueprintCallable, Category = Weapon)
-	void AttachShotgun();
+  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Weapon)
+  FName GunOutName;
+
+  // If currently holding the weapon out, not holstered
+  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Weapon)
+  bool bWeaponOut = false;
+
+  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Weapon)
+  bool bWantsToEquip1 = false;
+
+  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Weapon)
+  bool bWantsToEquip2 = false;
+
+  protected:
+  // Amount of shotgun ammo in reserve
+  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Weapon)
+  int ShotgunReserve;
+
+  public:
+  // Reference to gun that is being held
+  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Weapon)
+  UGunComponent *GunOut;
+
+  UFUNCTION(BlueprintCallable, Category = Weapon)
+  int GetShotgunReserve();
+
+  UFUNCTION(BlueprintCallable, Category = Weapon)
+  void DecreaseShotgunReserve(int Amount);
+
+  protected:
+
+  // Ref to gun in slot 1
+  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Weapon)
+  UGunComponent *GunSlot1;
+
+  // Ref to gun in slot 2
+  UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Weapon)
+  UGunComponent *GunSlot2;
+
+
+
+  // Input action functions below called to do these specific things on GunOut
+
+  UFUNCTION(BlueprintCallable, Category="Weapon")
+	void StartShootingInput();
+
+	UFUNCTION(BlueprintCallable, Category="Weapon")
+	void StopShootingInput();
+
+public:
+	UFUNCTION(BlueprintCallable, Category="Weapon")
+	void EquipInput1();
+  
+  UFUNCTION(BlueprintCallable, Category="Weapon")
+	void EquipInput2();
+
+protected:
+	UFUNCTION(BlueprintCallable, Category="Weapon")
+	void HolsterInput();
+
+	UFUNCTION(BlueprintCallable, Category="Weapon")
+	void ReloadInput();
+  public:
+  // Attempts to pickup gun
+  void AttemptGunPickup(UGunComponent *Gun, FName Name);
+
+  UFUNCTION(BlueprintCallable, Category = Weapon)
+  void AddShotgunAmmo(int Ammo);
+
+  // Attaches gun to character with slot provided
+  UFUNCTION(BlueprintCallable, Category = Weapon)
+  void AddGun(UGunComponent *Gun, FName Name, int Slot);
 
 	UFUNCTION(BlueprintCallable, Category = Weapon)
 	bool GetHasShotgun();
+
+  UFUNCTION(BlueprintCallable, Category = Weapon)
+	void SetHasShotgun(bool bNewHasShotgun);
 
   //to set bHasShoes to true
   UFUNCTION()
@@ -745,6 +838,9 @@ protected:
   
   UFUNCTION(BlueprintCallable)
   void UpdateCameraTransform(float Value, bool Returning);
+
+  UFUNCTION(BlueprintCallable)
+  void AlignCameraTransforms();
 
   protected:
 
@@ -921,6 +1017,8 @@ public:
 	UCameraComponent* GetFirstPersonCameraComponent() const { return FirstPersonCameraComponent; }
 
   USpringArmComponent *GetSpringArm() const {return SpringArm;}
+
+  UCameraComponent* GetMeshCameraComponent() const {return MeshCameraComponent;};
 
 };
 

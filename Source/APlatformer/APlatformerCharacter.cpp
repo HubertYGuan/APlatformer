@@ -15,6 +15,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "PCThing.h"
 #include "MainGI.h"
+#include "ShotgunComponent.h"
 
 
 //////////////////////////////////////////////////////////////////////////
@@ -541,6 +542,11 @@ void AAPlatformerCharacter::UpdateCameraTransform(float Value, bool Returning)
   }
 }
 
+void AAPlatformerCharacter::AlignCameraTransforms()
+{
+  MeshCameraComponent->SetWorldLocationAndRotation(FirstPersonCameraComponent->GetComponentLocation(), FirstPersonCameraComponent->GetComponentRotation());
+}
+
 void AAPlatformerCharacter::StopLedgeHangAndClimbing(const FInputActionValue &InputActionValue)
 {
   if (!bIsClimbing)
@@ -684,7 +690,7 @@ void AAPlatformerCharacter::WallRunCompute(const FInputActionValue &Value)
   {
     return;
   }
-  if (!bIsSprinting)
+  if (!bIsSprinting || !bHasClimbingGear)
   {
     return;
   }
@@ -1089,16 +1095,20 @@ AAPlatformerCharacter::AAPlatformerCharacter()
   SpringArm->SetRelativeLocation(FVector(-10.f, 0.f, 60.f));
   SpringArm->TargetArmLength = 0.f;
 
-	// Create a CameraComponent	
+  // Create a CameraComponent	
 	FirstPersonCameraComponent = CreateDefaultSubobject<UCameraComponent>(TEXT("FirstPersonCamera"));
 	FirstPersonCameraComponent->SetupAttachment(SpringArm, USpringArmComponent::SocketName);
 	FirstPersonCameraComponent->SetRelativeLocation(FVector(0.f,0.f,0.f)); // Position the camera
 	FirstPersonCameraComponent->bUsePawnControlRotation = true;
 
+  MeshCameraComponent = CreateDefaultSubobject<UCameraComponent>(TEXT("MeshCamera"));
+	MeshCameraComponent->SetupAttachment(SpringArm, USpringArmComponent::SocketName);
+	MeshCameraComponent->SetRelativeLocation(FVector(0.f,0.f,0.f)); // Position the camera
+	MeshCameraComponent->bUsePawnControlRotation = true;
 	// Create a mesh component that will be used when being viewed from a '1st person' view (when controlling this pawn)
 	Mesh1P = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("CharacterMesh1P"));
 	Mesh1P->SetOnlyOwnerSee(true);
-	Mesh1P->SetupAttachment(FirstPersonCameraComponent);
+	Mesh1P->SetupAttachment(GetMeshCameraComponent());
 	Mesh1P->bCastDynamicShadow = false;
 	Mesh1P->CastShadow = false;
 	//Mesh1P->SetRelativeRotation(FRotator(0.9f, -19.19f, 5.2f));
@@ -1233,6 +1243,17 @@ void AAPlatformerCharacter::SetupPlayerInputComponent(class UInputComponent* Pla
     //interact actions
     EnhancedInputComponent->BindAction(InteractAction, ETriggerEvent::Started, this, &AAPlatformerCharacter::StartInteract);
     EnhancedInputComponent->BindAction(InteractAction, ETriggerEvent::Completed, this, &AAPlatformerCharacter::StopInteract);
+
+    //Pewpew actions
+    EnhancedInputComponent->BindAction(ShootingAction, ETriggerEvent::Started, this, &AAPlatformerCharacter::StartShootingInput);
+    EnhancedInputComponent->BindAction(ShootingAction, ETriggerEvent::Completed, this, &AAPlatformerCharacter::StopShootingInput);
+
+    EnhancedInputComponent->BindAction(ReloadAction, ETriggerEvent::Started, this, &AAPlatformerCharacter::ReloadInput);
+
+    EnhancedInputComponent->BindAction(EquipAction1, ETriggerEvent::Started, this, &AAPlatformerCharacter::EquipInput1);
+    EnhancedInputComponent->BindAction(EquipAction2, ETriggerEvent::Started, this, &AAPlatformerCharacter::EquipInput2);
+
+    EnhancedInputComponent->BindAction(HolsterAction, ETriggerEvent::Started, this, &AAPlatformerCharacter::HolsterInput);
 	}
 }
 
@@ -1711,12 +1732,14 @@ void AAPlatformerCharacter::SlideHeightChange(bool ShouldBeLow)
   {
     GetCapsuleComponent()->SetCapsuleHalfHeight(40.f);
     FirstPersonCameraComponent->SetRelativeLocation(FVector(-10.f, 0.f, 32.f));
+    MeshCameraComponent->SetRelativeLocation(FVector(-10.f, 0.f, 32.f));
     SetActorLocation(GetActorLocation() - FVector(0, 0, 96.f - 40.f));
   }
   else
   {
     GetCapsuleComponent()->SetCapsuleHalfHeight(96.f);
     FirstPersonCameraComponent->SetRelativeLocation(FVector(-10.f, 0.f, 60.f));
+    MeshCameraComponent->SetRelativeLocation(FVector(-10.f, 0.f, 60.f));
   }
 }
 
@@ -2111,6 +2134,9 @@ void AAPlatformerCharacter::RespawnPlayer_Implementation()
   UKismetSystemLibrary::K2_SetTimer(this, "JumpFatigueTimerReset", 0.01, false);
   Health = MaxHealth;
   UpdateHealthBarThing();
+  SpringArm->SetRelativeLocationAndRotation(FVector(-10.f, 0.f, 60.f), FRotator(0.f, 0.f, 0.f));
+  FirstPersonCameraComponent->SetRelativeLocationAndRotation(FVector(0.f, 0.f, 0.f), FRotator(0.f, 0.f, 0.f));
+  MeshCameraComponent->SetRelativeLocationAndRotation(FVector(0.f, 0.f, 0.f), FRotator(0.f, 0.f, 0.f));
 }
 void AAPlatformerCharacter::KillPlayer_Implementation()
 {
@@ -2136,18 +2162,152 @@ bool AAPlatformerCharacter::GetHasRifle()
 	return bHasRifle;
 }
 
-void AAPlatformerCharacter::AttachShotgun()
+int AAPlatformerCharacter::GetShotgunReserve()
 {
-  // Slightly copied from template
+  return ShotgunReserve;
+}
 
+void AAPlatformerCharacter::DecreaseShotgunReserve(int Amount)
+{
+  ShotgunReserve -= Amount;
+}
 
+void AAPlatformerCharacter::StartShootingInput()
+{
+  if (!bWeaponOut)
+  {
+    UKismetSystemLibrary::PrintString(this, "gun not out");
+    return;
+  }
+  UKismetSystemLibrary::PrintString(this, "shooting input called");
+  GunOut->StartShooting();
+}
 
+void AAPlatformerCharacter::EquipInput1()
+{
+  if (GunSlot1 == GunOut || GunSlot1 == nullptr)
+  {
+    UKismetSystemLibrary::PrintString(this, "Gun not equipped");
+    return;
+  }
+  UKismetSystemLibrary::PrintString(this, "Attempting equip input");
+  if (bWeaponOut)
+  {
+    HolsterInput();
+    bWantsToEquip1 = true;
+    return;
+  }
+  GunSlot1->Equip(this);
+}
 
+void AAPlatformerCharacter::EquipInput2()
+{
+  if (GunSlot2 == GunOut || GunSlot2 == nullptr)
+  {
+    UKismetSystemLibrary::PrintString(this, "Gun not equipped");
+    return;
+  }
+  UKismetSystemLibrary::PrintString(this, "Attempting equip input");
+  if (bWeaponOut)
+  {
+    HolsterInput();
+    bWantsToEquip2 = true;
+    return;
+  }
+  GunSlot2->Equip(this);
+}
+
+void AAPlatformerCharacter::HolsterInput()
+{
+  if (GunOut != nullptr)
+  {
+    UKismetSystemLibrary::PrintString(this, "Attempting holster input");
+    GunOut->Holster();
+  }
+}
+
+void AAPlatformerCharacter::ReloadInput()
+{
+  if (GunOut != nullptr)
+  {
+    UKismetSystemLibrary::PrintString(this, "Attempting reload input");
+    GunOut->Reload();
+  }
+}
+
+void AAPlatformerCharacter::AttemptGunPickup(UGunComponent *Gun, FName Name)
+{
+  if (GunSlot1 == nullptr)
+  {
+    GunSlot1 = Gun;
+    AddGun(Gun, Name, 1);
+    return;
+  }
+  else if (GunSlot2 == nullptr)
+  {
+    GunSlot2 = Gun;
+    AddGun(Gun, Name, 2);
+    return;
+  }
+}
+
+void AAPlatformerCharacter::AddShotgunAmmo(int Ammo)
+{
+  ShotgunReserve += Ammo;
+}
+
+void AAPlatformerCharacter::StopShootingInput()
+{
+  if (!bWeaponOut)
+  {
+    return;
+  }
+  GunOut->StopShooting();
+}
+//TODO:
+//can do anims later, just modify the rifle anims
+//and then can work on holster, equip, reload, etc. inputs and finally firing
+void AAPlatformerCharacter::AddGun(UGunComponent *Gun, FName Name, int Slot)
+{
+  if (Gun == nullptr)
+  {
+    UKismetSystemLibrary::PrintString(this, "Gun is null");
+    return;
+  }
+  // Check the type of gun
+  TMap<FName, int> GunsMap{{FName("Shotgun"), 0}};
+  switch (GunsMap.FindRef(Name))
+  {
+  case 0:
+    // Shotgun
+    bHasShotgun = true;
+    if (!bWeaponOut)
+    {
+      Gun->Equip(this);
+      
+      UKismetSystemLibrary::PrintString(this, "calling equiop for shotgun");
+    }
+    else
+    {
+      Gun->AttachGun(this, true);
+      UKismetSystemLibrary::PrintString(this, "calling attachgun for shotgun to holster socket");
+    }
+    break;
+  
+  default:
+    UKismetSystemLibrary::PrintString(this, "Gun name not found");
+    break;
+  }
 }
 
 bool AAPlatformerCharacter::GetHasShotgun()
 {
   return bHasShotgun;
+}
+
+void AAPlatformerCharacter::SetHasShotgun(bool bNewHasShotgun)
+{
+  bHasShotgun = bNewHasShotgun;
 }
 
 void AAPlatformerCharacter::SetShoesTrue()
