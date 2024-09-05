@@ -720,16 +720,25 @@ void AAPlatformerCharacter::WallRunCompute(const FInputActionValue &Value)
         //cancel lean in
         WallRunStartTimelineStop();
       }
-      //wallbump
+      //wallbump initiate
       if (GetCharacterMovement()->bWantsToCrouch)
       {
-        UKismetSystemLibrary::PrintString(this, "wallbump c++");
-        WallRunDetect(true);
-        WallBump();
+        UKismetSystemLibrary::PrintString(this, "wallbump queued");
+        WallRun.bWallBumpQueued = true;
       }
     }
     else if (WallRunDetect() && !WallRun.bLeaning)
     {
+      if (WallRun.bWallBumpQueued && !WallRun.bWallBumping)
+      {
+        UKismetSystemLibrary::PrintString(this, "wall bump c++");
+        LandedDelegate.AddDynamic(this, &AAPlatformerCharacter::WallBumpReset);
+        WallRun.bWallBumpQueued = false;
+        WallRunDetect(true);
+        WallBump();
+
+        return;
+      }
       UKismetSystemLibrary::PrintString(this, "starting wall run timeline c__");
       //start lean in
       WallRunStartTimelineBegin();
@@ -893,6 +902,7 @@ void AAPlatformerCharacter::WallRunCancel()
   WallRunDetect(true);
   WallRunStartTimelineStop();
   WallRun.bGetVelocity = true;
+  WallRun.bWallBumpQueued = false;
   GetWorld()->GetTimerManager().SetTimer(WallRun.CoyoteHandle, this, &AAPlatformerCharacter::ResetSlideCooldown, 0.1, false);
 }
 
@@ -1035,7 +1045,7 @@ void AAPlatformerCharacter::WallBump()
 
   FVector VelocityXY = GetVelocity();
   VelocityXY.Z = 0.f;
-  FVector LaunchVector = VelocityXY - (WallRun.Normal * (1.2 * FVector::DotProduct(VelocityXY, WallRun.Normal)));
+  FVector LaunchVector = VelocityXY - (WallRun.Normal * (1.7 * FVector::DotProduct(VelocityXY, WallRun.Normal)));
   LaunchCharacter(LaunchVector, true, false);
 }
 
@@ -1548,6 +1558,7 @@ void AAPlatformerCharacter::CrouchE()
 
 void AAPlatformerCharacter::UnCrouchE()
 {
+  WallBumpReset(FHitResult());
   if (!bHasSlidingGear)
   {
     UnCrouch();
@@ -1726,20 +1737,19 @@ void AAPlatformerCharacter::EndSlideCompletely()
   }
 }
 
+// TODO: fix alignment issues
 void AAPlatformerCharacter::SlideHeightChange(bool ShouldBeLow)
 {
   if (ShouldBeLow)
   {
     GetCapsuleComponent()->SetCapsuleHalfHeight(40.f);
-    FirstPersonCameraComponent->SetRelativeLocation(FVector(-10.f, 0.f, 32.f));
-    MeshCameraComponent->SetRelativeLocation(FVector(-10.f, 0.f, 32.f));
+    SpringArm->SetRelativeLocation(FVector(-10.f, 0.f, 32.f));
     SetActorLocation(GetActorLocation() - FVector(0, 0, 96.f - 40.f));
   }
   else
   {
     GetCapsuleComponent()->SetCapsuleHalfHeight(96.f);
-    FirstPersonCameraComponent->SetRelativeLocation(FVector(-10.f, 0.f, 60.f));
-    MeshCameraComponent->SetRelativeLocation(FVector(-10.f, 0.f, 60.f));
+    SpringArm->SetRelativeLocation(FVector(-10.f, 0.f, 60.f));
   }
 }
 
@@ -2264,9 +2274,7 @@ void AAPlatformerCharacter::StopShootingInput()
   }
   GunOut->StopShooting();
 }
-//TODO:
-//can do anims later, just modify the rifle anims
-//and then can work on holster, equip, reload, etc. inputs and finally firing
+
 void AAPlatformerCharacter::AddGun(UGunComponent *Gun, FName Name, int Slot)
 {
   if (Gun == nullptr)

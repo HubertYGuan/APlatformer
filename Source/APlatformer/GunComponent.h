@@ -11,6 +11,25 @@ class AAPlatformerCharacter;
 /**
  * 
  */
+
+USTRUCT(BlueprintType)
+struct FFloatArray
+{
+	GENERATED_USTRUCT_BODY()
+
+	public:
+	TArray<float> Floats;
+
+	float operator[](int i)
+	{
+		return Floats[i];
+	}
+	void Add(float value)
+	{
+		Floats.Add(value);
+	}
+};
+
 UCLASS(Blueprintable, BlueprintType, ClassGroup=(Custom), meta=(BlueprintSpawnableComponent) )
 class APLATFORMER_API UGunComponent : public USkeletalMeshComponent
 {
@@ -22,6 +41,10 @@ class APLATFORMER_API UGunComponent : public USkeletalMeshComponent
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=Gameplay)
 	float DamagePerBullet;
+	
+	// First row for distances, second for falloff damage multipliers corresponding to distances
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=Gameplay)
+	TArray<FFloatArray> FalloffDamageMultipliers;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category=Gameplay)
 	bool bHolstered;

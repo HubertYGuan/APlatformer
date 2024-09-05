@@ -94,6 +94,9 @@ struct FWallRunStruct
   //if player is currently in the cancel wallrunning animation
   UPROPERTY(BlueprintReadOnly)
   bool bCancellingAnim = false;
+
+  bool bWallBumpQueued = false;
+  bool bWallBumping = false;
 };
 UCLASS(config=Game)
 class AAPlatformerCharacter : public ACharacter, public IOverlapInterface, public IInteractInterface
@@ -114,6 +117,9 @@ class AAPlatformerCharacter : public ACharacter, public IOverlapInterface, publi
 
   UFUNCTION(BlueprintCallable)
   void WallRunSetCancellingAnim(bool Value);
+
+  UFUNCTION()
+  void WallBumpReset(const FHitResult& Hit){WallRun.bWallBumpQueued = false; WallRun.bWallBumping = false;}
 
 	/** Pawn mesh: 1st person view (arms; seen only by self) */
 	UPROPERTY(VisibleDefaultsOnly, Category=Mesh)
